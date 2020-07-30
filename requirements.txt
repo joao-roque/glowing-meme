@@ -1,4 +1,4 @@
 pandas==1.0.5
 pycipapi==0.9.1
 pycellbase==4.7.0
-pyark==3.1.0
+clinical-variant-ark==4.1.12
