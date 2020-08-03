@@ -1,4 +1,4 @@
-from glowingmeme.build_data.clients import Clients
+from glowingmeme.clients.clients import Clients
 from protocols.protocol_7_2.reports import Program, Assembly
 
 cipapi, cellbase, cva = Clients().get_all_clients()
@@ -7,7 +7,7 @@ cases_client = cva.cases()
 
 cases_iterator = cases_client.get_cases(
     program=Program.rare_disease, assembly=Assembly.GRCh38,
-    caseStatuses="ARCHIVED_POSITIVE", hasCanonicalTrio=True, as_data_frame=True)
+    caseStatuses="ARCHIVED_POSITIVE", hasCanonicalTrio=True)
 case_1 = next(cases_iterator)
 
 report_events_client = cva.report_events()
