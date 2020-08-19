@@ -11,7 +11,13 @@ class ReportedOutcomeEnum(Enum):
     NOT_REPORTED = "not_reported"
 
 
-class BuildDataset(object):
+class BuildDataset:
+    DATASET_COLUMN_VALUES = ["id", "chromosome", "start", "end", "alt", "ref", "assembly", "case_id", "rs_id",
+                             "age", "sex", "zigosity", "tier", "mode_of_inheritance", "consequence_type",
+                             "MAF", "CADD_score", "type", "clinVar", "DisGeNET", "PhastCons", "phylop", "GERP",
+                             "program", "mother_ethnic_origin", "father_ethnic_origin",
+                             "gel_variant_acmg_classification", "case_solved_family", "phenotypes_solved",
+                             "interpretation_message", "dict_extra_scores", "reported_outcome"]
 
     @abstractmethod
     def build_dataset(self):
@@ -23,12 +29,6 @@ class BuildDataset(object):
 
 
 class BuildDatasetCVA(BuildDataset):
-    DATASET_COLUMN_VALUES = ["id", "chromosome", "start", "end", "alt", "ref", "assembly", "case_id", "rs_id",
-                             "age", "sex", "zigosity", "tier", "mode_of_inheritance", "consequence_type",
-                             "MAF", "CADD_score", "type", "clinVar", "DisGeNET", "PhastCons", "phylop", "GERP",
-                             "program", "mother_ethnic_origin", "father_ethnic_origin",
-                             "gel_variant_acmg_classification", "case_solved_family", "phenotypes_solved",
-                             "interpretation_message", "dict_extra_scores", "reported_outcome"]
 
     def __init__(self):
         """
@@ -42,7 +42,25 @@ class BuildDatasetCVA(BuildDataset):
         # The dataset IS composed of variants that are associated with a specific case. This means that the same
         # variant can appear multiple times along the dataset as long as it does not contain repeated information
         # and outcomes.
-        self.main_dataset_df = pd.DataFrame(columns=self.DATASET_COLUMN_VALUES)
+
+        # initialized in build dataset
+        self.main_dataset_df = None
+
+    def build_dataset(self):
+        """
+        This method starts the process to build the Dataset Based on CVA queries.
+        :return:
+        """
+        reported_variant_list, non_reported_variant_list = self._query_cva_archived_positive_cases()
+        self.main_dataset_df = self._create_dataframe_from_list(reported_variant_list + non_reported_variant_list)
+
+    def _create_dataframe_from_list(self, list_to_add):
+        """
+        This method adds a given list to the object's main_dataset_df.
+        :return:
+        """
+        dataset_df = pd.DataFrame(list_to_add, columns=self.DATASET_COLUMN_VALUES)
+        return dataset_df
 
     def _start_clients(self):
         """
@@ -100,7 +118,7 @@ class BuildDatasetCVA(BuildDataset):
                                                          case.get("allVariants", [])
                                                          )
             for variant in non_reported_variants:
-                tier = self._get_variant_tier(variant, tiered_variants)
+                tier = self._get_variant_info(variant, tiered_variants)
                 # variant corresponds to the queriable CVA id
                 non_reported_variant_list.append([variant, None, None, None,  None, None, assembly,
                                               case_id, None, age, sex, None, tier,
@@ -133,3 +151,21 @@ class BuildDatasetCVA(BuildDataset):
         subtracted_list = set((Counter(array_2) - Counter(array_1)).elements())
         return subtracted_list
 
+
+class BuildDatasetCipapi(BuildDataset):
+
+    def __init__(self, cva_built_dataset):
+        """
+        This class takes as precursor a Pandas Dataframe with the columns defined in the parent class, in the variable
+        DATASET_COLUMN_VALUES. It requires at least the columns case_id, assembly and variant details
+        ("chromosome", "start", "end") to be populated, otherwise it won't be able to find this information in cipapi.
+        :param cva_built_dataset:
+        """
+        pass
+
+    def build_dataset(self):
+        """
+        Start building the dataset.
+        :return:
+        """
+        pass
