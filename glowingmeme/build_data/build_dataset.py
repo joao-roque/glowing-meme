@@ -23,10 +23,12 @@ class BuildDataset(object):
 
 
 class BuildDatasetCVA(BuildDataset):
-    DATASET_COLUMN_VALUES = ["id", "chromosome", "start", "end", "build", "assembly", "case_id", "rs_id", "population",
-                             "age", "sex", "zigosity", "biotype", "tier", "mode_of_inheritance", "consequence_type",
+    DATASET_COLUMN_VALUES = ["id", "chromosome", "start", "end", "alt", "ref", "assembly", "case_id", "rs_id",
+                             "age", "sex", "zigosity", "tier", "mode_of_inheritance", "consequence_type",
                              "MAF", "CADD_score", "type", "clinVar", "DisGeNET", "PhastCons", "phylop", "GERP",
-                             "gene_name", "program", "reported_outcome"]
+                             "program", "mother_ethnic_origin", "father_ethnic_origin",
+                             "gel_variant_acmg_classification", "case_solved_family", "phenotypes_solved",
+                             "interpretation_message", "dict_extra_scores", "reported_outcome"]
 
     def __init__(self):
         """
@@ -77,48 +79,50 @@ class BuildDatasetCVA(BuildDataset):
                                                       version=str(case.get("version", "")))
             sex = case.get("probandSex", None)
             program = case.get("program", None)
-            age = case.get("probandEstimatedAgeAtAnalysis", None)
             tiered_variants = case.get("tieredVariants", {})
+            age = case.get("probandEstimatedAgeAtAnalysis", None)
+            classified_variants = case.get("classifiedVariants", {})
+            interpretation_message = case.get("interpretation", None)
 
             for variant in case.get("reportedVariants", []):
 
-                tier = self._get_variant_tier(variant, tiered_variants)
+                tier = self._get_variant_info(variant, tiered_variants)
+                variant_acmg_classification = self._get_variant_info(variant, classified_variants)
                 # variant corresponds to the queriable CVA id
-                reported_variant_list.append([variant, None, None, None, assembly,
-                                              case_id,
-                                              None, age, sex, None, None, tier,
-                                              None, None, None, None, None, None, None,
-                                              None, None, None, None, program,
+                reported_variant_list.append([variant, None, None, None,  None, None, assembly,
+                                              case_id, None, age, sex, None, tier,
+                                              None, None, None, None, None, None,
+                                              None, None, None, None, program, None, None, variant_acmg_classification,
+                                              None, None, interpretation_message, None,
                                               ReportedOutcomeEnum.REPORTED.value])
 
             non_reported_variants = self._subtract_lists(case.get("reportedVariants", []),
                                                          case.get("allVariants", [])
                                                          )
             for variant in non_reported_variants:
-
                 tier = self._get_variant_tier(variant, tiered_variants)
                 # variant corresponds to the queriable CVA id
-                non_reported_variant_list.append([variant, None, None, None, assembly,
-                                                  case_id,
-                                                  None, age, sex, None, None, tier,
-                                                  None, None, None, None, None, None, None,
-                                                  None, None, None, None, program,
-                                                  ReportedOutcomeEnum.NOT_REPORTED.value])
+                non_reported_variant_list.append([variant, None, None, None,  None, None, assembly,
+                                              case_id, None, age, sex, None, tier,
+                                              None, None, None, None, None, None,
+                                              None, None, None, None, program, None, None, None,
+                                              None, None, interpretation_message, None,
+                                              ReportedOutcomeEnum.NOT_REPORTED.value])
 
         return reported_variant_list, non_reported_variant_list
 
-    def _get_variant_tier(self, variant, tiered_variants):
+    def _get_variant_info(self, variant, info_dict):
         """
         This method returns the tier for a given variant given a dictionary of the variant tiers.
         :param variant:
-        :param tiered_variants:
+        :param info_dict:
         :return:
         """
-        tier = None
-        for key in tiered_variants.keys():
-            if variant in set(tiered_variants[key]):
-                tier = key
-        return tier
+        info = None
+        for key in info_dict.keys():
+            if variant in set(info_dict[key]):
+                info = key
+        return info
 
     @staticmethod
     def _subtract_lists(array_1, array_2):
@@ -129,10 +133,3 @@ class BuildDatasetCVA(BuildDataset):
         subtracted_list = set((Counter(array_2) - Counter(array_1)).elements())
         return subtracted_list
 
-    def get_variants_used_in_diagnosis(self):
-        """
-        This methods queries Genomics England services
-        to gather variants that were used in the diagnosis by the clinician.
-        :return:
-        """
-        pass
