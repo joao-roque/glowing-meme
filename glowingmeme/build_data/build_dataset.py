@@ -27,6 +27,20 @@ class BuildDataset:
         """
         pass
 
+    def _create_dataset_list(self, **dataset_column_values):
+        """
+        This method creates a list with parameters from DATASET_COLUMN_VALUES from a given dict. If one of the
+         parameters does not exist it will be set to None.
+        :return:
+        """
+        dataset_list = []
+        for key in self.DATASET_COLUMN_VALUES:
+            if key in dataset_column_values:
+                dataset_list.append(dataset_column_values[key])
+            else:
+                dataset_list.append(None)
+        return dataset_list
+
 
 class BuildDatasetCVA(BuildDataset):
 
@@ -85,7 +99,7 @@ class BuildDatasetCVA(BuildDataset):
         cases_iterator = self.cva_cases_client.get_cases(
             program=Program.rare_disease,
             assembly=Assembly.GRCh38,
-            caseStatuses="ARCHIVED_POSITIVE",
+            caseStatuses="ARCHIVED_POSITIVE"
         )
 
         for case in cases_iterator:
@@ -103,29 +117,28 @@ class BuildDatasetCVA(BuildDataset):
             interpretation_message = case.get("interpretation", None)
 
             for variant in case.get("reportedVariants", []):
-
                 tier = self._get_variant_info(variant, tiered_variants)
                 variant_acmg_classification = self._get_variant_info(variant, classified_variants)
-                # variant corresponds to the queriable CVA id
-                reported_variant_list.append([variant, None, None, None,  None, None, assembly,
-                                              case_id, None, age, sex, None, tier,
-                                              None, None, None, None, None, None,
-                                              None, None, None, None, program, None, None, variant_acmg_classification,
-                                              None, None, interpretation_message, None,
-                                              ReportedOutcomeEnum.REPORTED.value])
+                # variant corresponds to the queryable CVA id
+                variant_info = self._create_dataset_list(
+                    **{"id": variant, "assembly": assembly, "case_id": case_id, "age": age, "sex": sex, "tier": tier,
+                       "program": program, "gel_variant_acmg_classification": variant_acmg_classification,
+                       "reported_outcome": ReportedOutcomeEnum.REPORTED.value})
+
+                reported_variant_list.append(variant_info)
 
             non_reported_variants = self._subtract_lists(case.get("reportedVariants", []),
                                                          case.get("allVariants", [])
                                                          )
             for variant in non_reported_variants:
                 tier = self._get_variant_info(variant, tiered_variants)
-                # variant corresponds to the queriable CVA id
-                non_reported_variant_list.append([variant, None, None, None,  None, None, assembly,
-                                              case_id, None, age, sex, None, tier,
-                                              None, None, None, None, None, None,
-                                              None, None, None, None, program, None, None, None,
-                                              None, None, interpretation_message, None,
-                                              ReportedOutcomeEnum.NOT_REPORTED.value])
+                # variant corresponds to the queryable CVA id
+
+                variant_info = self._create_dataset_list(
+                    **{"id": variant, "assembly": assembly, "case_id": case_id, "age": age, "sex": sex, "tier": tier,
+                       "program": program, "interpretation_message": interpretation_message,
+                       "reported_outcome": ReportedOutcomeEnum.NOT_REPORTED.value})
+                non_reported_variant_list.append(variant_info)
 
         return reported_variant_list, non_reported_variant_list
 
