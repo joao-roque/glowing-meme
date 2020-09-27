@@ -3,6 +3,7 @@ from enum import Enum
 from collections import Counter
 from abc import abstractmethod
 from glowingmeme.clients.clients import Clients
+from multiprocessing.dummy import Pool as ThreadPool
 from protocols.protocol_7_2.reports import Program, Assembly
 
 
@@ -12,12 +13,40 @@ class ReportedOutcomeEnum(Enum):
 
 
 class BuildDataset:
-    DATASET_COLUMN_VALUES = ["id", "chromosome", "start", "end", "alt", "ref", "assembly", "case_id", "rs_id",
-                             "age", "sex", "zigosity", "tier", "mode_of_inheritance", "consequence_type",
-                             "MAF", "CADD_score", "type", "clinVar", "DisGeNET", "PhastCons", "phylop", "GERP",
-                             "program", "mother_ethnic_origin", "father_ethnic_origin",
-                             "gel_variant_acmg_classification", "case_solved_family", "phenotypes_solved",
-                             "interpretation_message", "dict_extra_scores", "reported_outcome"]
+    DATASET_COLUMN_VALUES = [
+        "id",
+        "chromosome",
+        "start",
+        "end",
+        "alt",
+        "ref",
+        "assembly",
+        "case_id",
+        "rs_id",
+        "age",
+        "sex",
+        "zigosity",
+        "tier",
+        "mode_of_inheritance",
+        "consequence_type",
+        "MAF",
+        "CADD_score",
+        "type",
+        "clinVar",
+        "DisGeNET",
+        "PhastCons",
+        "phylop",
+        "GERP",
+        "program",
+        "mother_ethnic_origin",
+        "father_ethnic_origin",
+        "gel_variant_acmg_classification",
+        "case_solved_family",
+        "phenotypes_solved",
+        "interpretation_message",
+        "dict_extra_scores",
+        "reported_outcome",
+    ]
 
     @abstractmethod
     def build_dataset(self):
@@ -31,6 +60,7 @@ class BuildDataset:
         """
         This method creates a list with parameters from DATASET_COLUMN_VALUES from a given dict. If one of the
          parameters does not exist it will be set to None.
+        :param dataset_column_values:
         :return:
         """
         dataset_list = []
@@ -41,9 +71,21 @@ class BuildDataset:
                 dataset_list.append(None)
         return dataset_list
 
+    def _start_clients(self):
+        """
+        Auto restart of clients so tokens don't expire.
+        :return:
+        """
+        (
+            self.cipapi_client,
+            self.cellbase_client,
+            self.cva_client,
+        ) = Clients().get_all_clients()
+        self.cva_cases_client = self.cva_client.cases()
+        self.cva_variants_client = self.cva_client.variants()
+
 
 class BuildDatasetCVA(BuildDataset):
-
     def __init__(self):
         """
         Clients used to query services.
@@ -65,8 +107,14 @@ class BuildDatasetCVA(BuildDataset):
         This method starts the process to build the Dataset Based on CVA queries.
         :return:
         """
-        reported_variant_list, non_reported_variant_list = self._query_cva_archived_positive_cases()
-        self.main_dataset_df = self._create_dataframe_from_list(reported_variant_list + non_reported_variant_list)
+        (
+            reported_variant_list,
+            non_reported_variant_list,
+        ) = self._query_cva_archived_positive_cases()
+        self.main_dataset_df = self._create_dataframe_from_list(
+            reported_variant_list + non_reported_variant_list
+        )
+        self._fetch_specific_variant_information()
 
     def _create_dataframe_from_list(self, list_to_add):
         """
@@ -75,18 +123,6 @@ class BuildDatasetCVA(BuildDataset):
         """
         dataset_df = pd.DataFrame(list_to_add, columns=self.DATASET_COLUMN_VALUES)
         return dataset_df
-
-    def _start_clients(self):
-        """
-        Auto restart of clients so tokens don't expire.
-        :return:
-        """
-        (
-            self.cipapi_client,
-            self.cellbase_client,
-            self.cva_client,
-        ) = Clients().get_all_clients()
-        self.cva_cases_client = self.cva_client.cases()
 
     def _query_cva_archived_positive_cases(self):
         """
@@ -99,7 +135,8 @@ class BuildDatasetCVA(BuildDataset):
         cases_iterator = self.cva_cases_client.get_cases(
             program=Program.rare_disease,
             assembly=Assembly.GRCh38,
-            caseStatuses="ARCHIVED_POSITIVE"
+            caseStatuses="ARCHIVED_POSITIVE",
+            max_results=10
         )
 
         for case in cases_iterator:
@@ -107,8 +144,10 @@ class BuildDatasetCVA(BuildDataset):
             # since the variants belong to the same case, both the reported and non reported ones will have
             # some similar information, e.g. population
             assembly = case.get("assembly", None)
-            case_id = "{identifier}-{version}".format(identifier=case.get("identifier", ""),
-                                                      version=str(case.get("version", "")))
+            case_id = "{identifier}-{version}".format(
+                identifier=case.get("identifier", ""),
+                version=str(case.get("version", "")),
+            )
             sex = case.get("probandSex", None)
             program = case.get("program", None)
             tiered_variants = case.get("tieredVariants", {})
@@ -118,29 +157,65 @@ class BuildDatasetCVA(BuildDataset):
 
             for variant in case.get("reportedVariants", []):
                 tier = self._get_variant_info(variant, tiered_variants)
-                variant_acmg_classification = self._get_variant_info(variant, classified_variants)
+                variant_acmg_classification = self._get_variant_info(
+                    variant, classified_variants
+                )
                 # variant corresponds to the queryable CVA id
                 variant_info = self._create_dataset_list(
-                    **{"id": variant, "assembly": assembly, "case_id": case_id, "age": age, "sex": sex, "tier": tier,
-                       "program": program, "gel_variant_acmg_classification": variant_acmg_classification,
-                       "reported_outcome": ReportedOutcomeEnum.REPORTED.value})
+                    **{
+                        "id": variant,
+                        "assembly": assembly,
+                        "case_id": case_id,
+                        "age": age,
+                        "sex": sex,
+                        "tier": tier,
+                        "program": program,
+                        "gel_variant_acmg_classification": variant_acmg_classification,
+                        "reported_outcome": ReportedOutcomeEnum.REPORTED.value,
+                    }
+                )
 
                 reported_variant_list.append(variant_info)
 
-            non_reported_variants = self._subtract_lists(case.get("reportedVariants", []),
-                                                         case.get("allVariants", [])
-                                                         )
+            non_reported_variants = self._subtract_lists(
+                case.get("reportedVariants", []), case.get("allVariants", [])
+            )
             for variant in non_reported_variants:
                 tier = self._get_variant_info(variant, tiered_variants)
                 # variant corresponds to the queryable CVA id
 
                 variant_info = self._create_dataset_list(
-                    **{"id": variant, "assembly": assembly, "case_id": case_id, "age": age, "sex": sex, "tier": tier,
-                       "program": program, "interpretation_message": interpretation_message,
-                       "reported_outcome": ReportedOutcomeEnum.NOT_REPORTED.value})
+                    **{
+                        "id": variant,
+                        "assembly": assembly,
+                        "case_id": case_id,
+                        "age": age,
+                        "sex": sex,
+                        "tier": tier,
+                        "program": program,
+                        "interpretation_message": interpretation_message,
+                        "reported_outcome": ReportedOutcomeEnum.NOT_REPORTED.value,
+                    }
+                )
                 non_reported_variant_list.append(variant_info)
 
         return reported_variant_list, non_reported_variant_list
+
+    def _fetch_specific_variant_information(self):
+        """
+        This method uses the CVA variant client and the previously fetched variants to provide more info for them.
+        :return:
+        """
+        all_unique_variants = set(self.main_dataset_df["id"].tolist())
+        # all_cva_fetched_variant_info_iterator = self.cva_variants_client.get_variants_by_id(all_unique_variants)
+        k = []
+
+        pool = ThreadPool(4)
+        all_unique_variants_fetched = pool.map(self.cva_variants_client.get_variant_by_id, all_unique_variants)
+
+        for variant_id in all_unique_variants_fetched:
+            x = 1
+        x = 1
 
     def _get_variant_info(self, variant, info_dict):
         """
@@ -166,7 +241,6 @@ class BuildDatasetCVA(BuildDataset):
 
 
 class BuildDatasetCipapi(BuildDataset):
-
     def __init__(self, cva_built_dataset):
         """
         This class takes as precursor a Pandas Dataframe with the columns defined in the parent class, in the variable
