@@ -6,14 +6,21 @@ from glowingmeme.clients.clients import Clients
 from multiprocessing.dummy import Pool as ThreadPool
 from protocols.protocol_7_2.reports import Program, Assembly
 
-
 class ReportedOutcomeEnum(Enum):
     REPORTED = "reported"
     NOT_REPORTED = "not_reported"
 
 
 class BuildDataset:
-    DATASET_COLUMN_VALUES = [
+    _ALL = "ALL"
+    _MALE = "MALE"
+    _FEMALE = "FEMALE"
+    _PHYLOP = "phylop"
+    _ASSEMBLY_38 = "GRCh38"
+    _PHAST_CONS = "phastCons"
+    _GNOMAD_GENOMES = 'GNOMAD_GENOMES'
+
+    _DATASET_COLUMN_VALUES = [
         "id",
         "chromosome",
         "start",
@@ -29,7 +36,8 @@ class BuildDataset:
         "tier",
         "mode_of_inheritance",
         "consequence_type",
-        "MAF",
+        "biotypes",
+        "population_frequency",
         "CADD_score",
         "type",
         "clinVar",
@@ -64,7 +72,7 @@ class BuildDataset:
         :return:
         """
         dataset_list = []
-        for key in self.DATASET_COLUMN_VALUES:
+        for key in self._DATASET_COLUMN_VALUES:
             if key in dataset_column_values:
                 dataset_list.append(dataset_column_values[key])
             else:
@@ -89,8 +97,6 @@ class BuildDatasetCVA(BuildDataset):
     def __init__(self):
         """
         Clients used to query services.
-        :param cipapi:
-        :param cva:
         """
         self._start_clients()
 
@@ -116,12 +122,13 @@ class BuildDatasetCVA(BuildDataset):
         )
         self._fetch_specific_variant_information()
 
+
     def _create_dataframe_from_list(self, list_to_add):
         """
         This method adds a given list to the object's main_dataset_df.
         :return:
         """
-        dataset_df = pd.DataFrame(list_to_add, columns=self.DATASET_COLUMN_VALUES)
+        dataset_df = pd.DataFrame(list_to_add, columns=self._DATASET_COLUMN_VALUES)
         return dataset_df
 
     def _query_cva_archived_positive_cases(self):
@@ -136,7 +143,6 @@ class BuildDatasetCVA(BuildDataset):
             program=Program.rare_disease,
             assembly=Assembly.GRCh38,
             caseStatuses="ARCHIVED_POSITIVE",
-            max_results=10
         )
 
         for case in cases_iterator:
@@ -207,15 +213,115 @@ class BuildDatasetCVA(BuildDataset):
         :return:
         """
         all_unique_variants = set(self.main_dataset_df["id"].tolist())
-        # all_cva_fetched_variant_info_iterator = self.cva_variants_client.get_variants_by_id(all_unique_variants)
-        k = []
 
-        pool = ThreadPool(4)
+        # threading available in client keeps breaking.
+        # Implementing it here instead
+        pool = ThreadPool(8)
         all_unique_variants_fetched = pool.map(self.cva_variants_client.get_variant_by_id, all_unique_variants)
 
-        for variant_id in all_unique_variants_fetched:
-            x = 1
-        x = 1
+        for variant_wrapper in all_unique_variants_fetched:
+            if variant_wrapper.variants:
+                for variant in variant_wrapper.variants:
+                    if variant.assembly == self._ASSEMBLY_38 and variant.annotation:
+                        variant_in_dataset = self.main_dataset_df.loc[self.main_dataset_df["id"] == variant_wrapper.id]
+
+                        variant_type = variant.smallVariantType
+                        if variant.variantType:
+                            variant_type = variant.variantType
+
+                        # rebuilding list with new values fetched
+                        variant_info = self._create_dataset_list(
+                            **{
+                                "id": variant_in_dataset["id"].values[0],
+                                "chromosome": variant.annotation.chromosome,
+                                "start": variant.annotation.start,
+                                "end": variant.annotation.end,
+                                "alt": variant.annotation.alternate,
+                                "ref": variant.annotation.reference,
+                                "rs_id": variant.annotation.id,
+                                "consequence_type": self._get_sequence_ontology_terms(
+                                    variant.annotation.consequenceTypes),
+                                "biotypes": self._get_biotypes(variant.annotation.consequenceTypes),
+                                "population_frequency": self._get_population_frequency(
+                                    variant_in_dataset["sex"].values[0], variant.annotation.populationFrequencies),
+                                "type": variant_type,
+                                "PhastCons": self._get_conservation_score_from_source(self._PHAST_CONS,
+                                                                                      variant.annotation.conservation),
+                                "phylop": self._get_conservation_score_from_source(self._PHYLOP,
+                                                                                   variant.annotation.conservation),
+                                "assembly": variant_in_dataset["assembly"].values[0],
+                                "case_id": variant_in_dataset["case_id"].values[0],
+                                "age": variant_in_dataset["age"].values[0],
+                                "sex": variant_in_dataset["sex"].values[0],
+                                "tier": variant_in_dataset["tier"].values[0],
+                                "program": variant_in_dataset["program"].values[0],
+                                "gel_variant_acmg_classification":
+                                    variant_in_dataset["gel_variant_acmg_classification"].values[0],
+                                "interpretation_message": variant_in_dataset["interpretation_message"].values[0],
+                                "reported_outcome": variant_in_dataset["reported_outcome"].values[0],
+                            }
+                        )
+
+                        self.main_dataset_df.loc[self.main_dataset_df["id"] == variant_wrapper.id] = variant_info
+
+    def _get_population_frequency(self, sex, population_frequencies_list):
+        """
+        This method, from a given PopulationsFrequencies object and sex of participant, extracts the most relevant
+        population frequency. For now it only uses sex for its logic.
+        :return:
+        """
+        population_all_frequency = None
+        population_sex_frequency = None
+        if population_frequencies_list:
+            for population_frequency in population_frequencies_list:
+                if population_frequency.study == self._GNOMAD_GENOMES:
+                    if population_frequency.population == sex:
+                        population_sex_frequency = population_frequency.altAlleleFreq
+
+                    if population_frequency.population == self._ALL:
+                        population_all_frequency = population_frequency.altAlleleFreq
+
+        if population_sex_frequency:
+            return population_sex_frequency
+        return population_all_frequency
+
+    def _get_sequence_ontology_terms(self, consequence_types_list):
+        """
+        This method returns a list of sequence ontology terms given a list of consequenceType objects.
+        :return:
+        """
+        sequence_names = []
+        for consequence_type in consequence_types_list:
+            for sequence_ontology in consequence_type.sequenceOntologyTerms:
+                if sequence_ontology.name:
+                    sequence_names.append(sequence_ontology.name)
+
+        if sequence_names:
+            return ",".join(sequence_names)
+        return None
+
+    def _get_biotypes(self, consequence_types_list):
+        """
+        This method returns a list of biotypes given a list of consequenceType objects.
+        :return:
+        """
+        biotypes = [consequence_type.biotype for consequence_type in consequence_types_list if consequence_type.biotype]
+
+        if biotypes:
+            return ",".join(biotypes)
+        return None
+
+    def _get_conservation_score_from_source(self, source, conservation):
+        """
+        This method returns the required score given a conservation object list.
+        :param conservation:
+        :return:
+        """
+        if conservation:
+            for conservation_score in conservation:
+                if conservation_score.source == source:
+                    return conservation_score.score
+        return None
 
     def _get_variant_info(self, variant, info_dict):
         """
