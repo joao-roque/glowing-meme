@@ -6,6 +6,7 @@ from glowingmeme.clients.clients import Clients
 from multiprocessing.dummy import Pool as ThreadPool
 from protocols.protocol_7_2.reports import Program, Assembly
 
+
 class ReportedOutcomeEnum(Enum):
     REPORTED = "reported"
     NOT_REPORTED = "not_reported"
@@ -18,7 +19,7 @@ class BuildDataset:
     _PHYLOP = "phylop"
     _ASSEMBLY_38 = "GRCh38"
     _PHAST_CONS = "phastCons"
-    _GNOMAD_GENOMES = 'GNOMAD_GENOMES'
+    _GNOMAD_GENOMES = "GNOMAD_GENOMES"
 
     _DATASET_COLUMN_VALUES = [
         "id",
@@ -122,7 +123,6 @@ class BuildDatasetCVA(BuildDataset):
         )
         self._fetch_specific_variant_information()
 
-
     def _create_dataframe_from_list(self, list_to_add):
         """
         This method adds a given list to the object's main_dataset_df.
@@ -217,13 +217,17 @@ class BuildDatasetCVA(BuildDataset):
         # threading available in client keeps breaking.
         # Implementing it here instead
         pool = ThreadPool(8)
-        all_unique_variants_fetched = pool.map(self.cva_variants_client.get_variant_by_id, all_unique_variants)
+        all_unique_variants_fetched = pool.map(
+            self.cva_variants_client.get_variant_by_id, all_unique_variants
+        )
 
         for variant_wrapper in all_unique_variants_fetched:
             if variant_wrapper.variants:
                 for variant in variant_wrapper.variants:
                     if variant.assembly == self._ASSEMBLY_38 and variant.annotation:
-                        variant_in_dataset = self.main_dataset_df.loc[self.main_dataset_df["id"] == variant_wrapper.id]
+                        variant_in_dataset = self.main_dataset_df.loc[
+                            self.main_dataset_df["id"] == variant_wrapper.id
+                        ]
 
                         variant_type = variant.smallVariantType
                         if variant.variantType:
@@ -240,29 +244,43 @@ class BuildDatasetCVA(BuildDataset):
                                 "ref": variant.annotation.reference,
                                 "rs_id": variant.annotation.id,
                                 "consequence_type": self._get_sequence_ontology_terms(
-                                    variant.annotation.consequenceTypes),
-                                "biotypes": self._get_biotypes(variant.annotation.consequenceTypes),
+                                    variant.annotation.consequenceTypes
+                                ),
+                                "biotypes": self._get_biotypes(
+                                    variant.annotation.consequenceTypes
+                                ),
                                 "population_frequency": self._get_population_frequency(
-                                    variant_in_dataset["sex"].values[0], variant.annotation.populationFrequencies),
+                                    variant_in_dataset["sex"].values[0],
+                                    variant.annotation.populationFrequencies,
+                                ),
                                 "type": variant_type,
-                                "PhastCons": self._get_conservation_score_from_source(self._PHAST_CONS,
-                                                                                      variant.annotation.conservation),
-                                "phylop": self._get_conservation_score_from_source(self._PHYLOP,
-                                                                                   variant.annotation.conservation),
+                                "PhastCons": self._get_conservation_score_from_source(
+                                    self._PHAST_CONS, variant.annotation.conservation
+                                ),
+                                "phylop": self._get_conservation_score_from_source(
+                                    self._PHYLOP, variant.annotation.conservation
+                                ),
                                 "assembly": variant_in_dataset["assembly"].values[0],
                                 "case_id": variant_in_dataset["case_id"].values[0],
                                 "age": variant_in_dataset["age"].values[0],
                                 "sex": variant_in_dataset["sex"].values[0],
                                 "tier": variant_in_dataset["tier"].values[0],
                                 "program": variant_in_dataset["program"].values[0],
-                                "gel_variant_acmg_classification":
-                                    variant_in_dataset["gel_variant_acmg_classification"].values[0],
-                                "interpretation_message": variant_in_dataset["interpretation_message"].values[0],
-                                "reported_outcome": variant_in_dataset["reported_outcome"].values[0],
+                                "gel_variant_acmg_classification": variant_in_dataset[
+                                    "gel_variant_acmg_classification"
+                                ].values[0],
+                                "interpretation_message": variant_in_dataset[
+                                    "interpretation_message"
+                                ].values[0],
+                                "reported_outcome": variant_in_dataset[
+                                    "reported_outcome"
+                                ].values[0],
                             }
                         )
 
-                        self.main_dataset_df.loc[self.main_dataset_df["id"] == variant_wrapper.id] = variant_info
+                        self.main_dataset_df.loc[
+                            self.main_dataset_df["id"] == variant_wrapper.id
+                        ] = variant_info
 
     def _get_population_frequency(self, sex, population_frequencies_list):
         """
@@ -305,7 +323,11 @@ class BuildDatasetCVA(BuildDataset):
         This method returns a list of biotypes given a list of consequenceType objects.
         :return:
         """
-        biotypes = [consequence_type.biotype for consequence_type in consequence_types_list if consequence_type.biotype]
+        biotypes = [
+            consequence_type.biotype
+            for consequence_type in consequence_types_list
+            if consequence_type.biotype
+        ]
 
         if biotypes:
             return ",".join(biotypes)
