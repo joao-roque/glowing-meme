@@ -1,10 +1,12 @@
-import pandas as pd
 from enum import Enum
-from collections import Counter
 from abc import abstractmethod
-from glowingmeme.clients.clients import Clients
+from collections import Counter
 from multiprocessing.dummy import Pool as ThreadPool
+
 from protocols.protocol_7_2.reports import Program, Assembly
+
+from glowingmeme.clients.clients import Clients
+from glowingmeme.build_data.variant_entry_info import VariantEntryInfo
 
 
 class ReportedOutcomeEnum(Enum):
@@ -21,41 +23,20 @@ class BuildDataset:
     _PHAST_CONS = "phastCons"
     _GNOMAD_GENOMES = "GNOMAD_GENOMES"
 
-    _DATASET_COLUMN_VALUES = [
-        "id",
-        "chromosome",
-        "start",
-        "end",
-        "alt",
-        "ref",
-        "assembly",
-        "case_id",
-        "rs_id",
-        "age",
-        "sex",
-        "zigosity",
-        "tier",
-        "mode_of_inheritance",
-        "consequence_type",
-        "biotypes",
-        "population_frequency",
-        "CADD_score",
-        "type",
-        "clinVar",
-        "DisGeNET",
-        "PhastCons",
-        "phylop",
-        "GERP",
-        "program",
-        "mother_ethnic_origin",
-        "father_ethnic_origin",
-        "gel_variant_acmg_classification",
-        "case_solved_family",
-        "phenotypes_solved",
-        "interpretation_message",
-        "dict_extra_scores",
-        "reported_outcome",
-    ]
+    def __init__(self):
+
+        # IMPORTANT DESCRIPTION OF DATASET
+        # The dataset IS composed of variants that are associated with a specific case. This means that the same
+        # variant can appear multiple times along the dataset as long as it does not contain repeated information
+        # and outcomes.
+
+        # this is a set of VariantEntryInfo objects. It is a set because we do not want repeated variants
+        self.main_dataset = set()
+
+        # this helper can be redefined by which attribute need by calling _set_dataset_index_helper_by_attribute
+        # NOTE: This dictionary is a reference to the original objects in the main_dataset list. If a change is made
+        # in these object, the original objects in the main_dataset will also change.
+        self.dataset_index_helper = {}
 
     @abstractmethod
     def build_dataset(self):
@@ -64,21 +45,6 @@ class BuildDataset:
         :return:
         """
         pass
-
-    def _create_dataset_list(self, **dataset_column_values):
-        """
-        This method creates a list with parameters from DATASET_COLUMN_VALUES from a given dict. If one of the
-         parameters does not exist it will be set to None.
-        :param dataset_column_values:
-        :return:
-        """
-        dataset_list = []
-        for key in self._DATASET_COLUMN_VALUES:
-            if key in dataset_column_values:
-                dataset_list.append(dataset_column_values[key])
-            else:
-                dataset_list.append(None)
-        return dataset_list
 
     def _start_clients(self):
         """
@@ -93,21 +59,32 @@ class BuildDataset:
         self.cva_cases_client = self.cva_client.cases()
         self.cva_variants_client = self.cva_client.variants()
 
+    def _set_dataset_index_helper_by_attribute(self, dataset_key):
+        """
+        In order to massively speed up querying specific VariantInfo objects of the main dataset, we here create
+        a dictionary that will index said objects by a given key e.g variantId
+
+        This dictionary is a reference to the original objects in the main_dataset list
+        :return:
+        """
+        dataset_by_key = {}
+        if dataset_key in VariantEntryInfo.VARIANT_INFO_VALUES:
+            for variant_info_object in self.main_dataset:
+                new_key = vars(variant_info_object)[dataset_key]
+                if new_key in dataset_by_key:
+                    dataset_by_key[new_key].append(variant_info_object)
+                else:
+                    dataset_by_key[new_key] = [variant_info_object]
+        self.dataset_index_helper = dataset_by_key
+
 
 class BuildDatasetCVA(BuildDataset):
     def __init__(self):
         """
         Clients used to query services.
         """
+        BuildDataset.__init__(self)
         self._start_clients()
-
-        # IMPORTANT DESCRIPTION OF DATASET
-        # The dataset IS composed of variants that are associated with a specific case. This means that the same
-        # variant can appear multiple times along the dataset as long as it does not contain repeated information
-        # and outcomes.
-
-        # initialized in build dataset
-        self.main_dataset_df = None
 
     def build_dataset(self):
         """
@@ -117,21 +94,14 @@ class BuildDatasetCVA(BuildDataset):
         (
             reported_variant_list,
             non_reported_variant_list,
-        ) = self._query_cva_archived_positive_cases()
-        self.main_dataset_df = self._create_dataframe_from_list(
+        ) = self._query_cva_archived_cases()
+        self.main_dataset.update(
             reported_variant_list + non_reported_variant_list
         )
+        self._set_dataset_index_helper_by_attribute("id")
         self._fetch_specific_variant_information()
 
-    def _create_dataframe_from_list(self, list_to_add):
-        """
-        This method adds a given list to the object's main_dataset_df.
-        :return:
-        """
-        dataset_df = pd.DataFrame(list_to_add, columns=self._DATASET_COLUMN_VALUES)
-        return dataset_df
-
-    def _query_cva_archived_positive_cases(self):
+    def _query_cva_archived_cases(self):
         """
         This method queries all the CVA cases that were archived with a positive result. It build
         :return: reported_variant_list, non_reported_variant_list
@@ -142,7 +112,9 @@ class BuildDatasetCVA(BuildDataset):
         cases_iterator = self.cva_cases_client.get_cases(
             program=Program.rare_disease,
             assembly=Assembly.GRCh38,
-            caseStatuses="ARCHIVED_POSITIVE",
+            caseStatuses=["ARCHIVED_POSITIVE", "ARCHIVED_NEGATIVE"],
+            include_all=False,
+            max_results=1
         )
 
         for case in cases_iterator:
@@ -167,7 +139,7 @@ class BuildDatasetCVA(BuildDataset):
                     variant, classified_variants
                 )
                 # variant corresponds to the queryable CVA id
-                variant_info = self._create_dataset_list(
+                variant_info = VariantEntryInfo(
                     **{
                         "id": variant,
                         "assembly": assembly,
@@ -190,7 +162,7 @@ class BuildDatasetCVA(BuildDataset):
                 tier = self._get_variant_info(variant, tiered_variants)
                 # variant corresponds to the queryable CVA id
 
-                variant_info = self._create_dataset_list(
+                variant_info = VariantEntryInfo(
                     **{
                         "id": variant,
                         "assembly": assembly,
@@ -212,75 +184,56 @@ class BuildDatasetCVA(BuildDataset):
         This method uses the CVA variant client and the previously fetched variants to provide more info for them.
         :return:
         """
-        all_unique_variants = set(self.main_dataset_df["id"].tolist())
+        all_unique_variants = self.dataset_index_helper.keys()
 
         # threading available in client keeps breaking.
         # Implementing it here instead
         pool = ThreadPool(8)
         all_unique_variants_fetched = pool.map(
-            self.cva_variants_client.get_variant_by_id, all_unique_variants
+            self.cva_variants_client.get_variant_by_id,
+            all_unique_variants
         )
 
         for variant_wrapper in all_unique_variants_fetched:
             if variant_wrapper.variants:
                 for variant in variant_wrapper.variants:
                     if variant.assembly == self._ASSEMBLY_38 and variant.annotation:
-                        variant_in_dataset = self.main_dataset_df.loc[
-                            self.main_dataset_df["id"] == variant_wrapper.id
-                        ]
+                        for variant_info_object in self.dataset_index_helper[variant_wrapper.id]:
 
-                        variant_type = variant.smallVariantType
-                        if variant.variantType:
-                            variant_type = variant.variantType
+                            variant_type = variant.smallVariantType
+                            if variant.variantType:
+                                variant_type = variant.variantType
 
-                        # rebuilding list with new values fetched
-                        variant_info = self._create_dataset_list(
-                            **{
-                                "id": variant_in_dataset["id"].values[0],
-                                "chromosome": variant.annotation.chromosome,
-                                "start": variant.annotation.start,
-                                "end": variant.annotation.end,
-                                "alt": variant.annotation.alternate,
-                                "ref": variant.annotation.reference,
-                                "rs_id": variant.annotation.id,
-                                "consequence_type": self._get_sequence_ontology_terms(
-                                    variant.annotation.consequenceTypes
-                                ),
-                                "biotypes": self._get_biotypes(
-                                    variant.annotation.consequenceTypes
-                                ),
-                                "population_frequency": self._get_population_frequency(
-                                    variant_in_dataset["sex"].values[0],
-                                    variant.annotation.populationFrequencies,
-                                ),
-                                "type": variant_type,
-                                "PhastCons": self._get_conservation_score_from_source(
-                                    self._PHAST_CONS, variant.annotation.conservation
-                                ),
-                                "phylop": self._get_conservation_score_from_source(
-                                    self._PHYLOP, variant.annotation.conservation
-                                ),
-                                "assembly": variant_in_dataset["assembly"].values[0],
-                                "case_id": variant_in_dataset["case_id"].values[0],
-                                "age": variant_in_dataset["age"].values[0],
-                                "sex": variant_in_dataset["sex"].values[0],
-                                "tier": variant_in_dataset["tier"].values[0],
-                                "program": variant_in_dataset["program"].values[0],
-                                "gel_variant_acmg_classification": variant_in_dataset[
-                                    "gel_variant_acmg_classification"
-                                ].values[0],
-                                "interpretation_message": variant_in_dataset[
-                                    "interpretation_message"
-                                ].values[0],
-                                "reported_outcome": variant_in_dataset[
-                                    "reported_outcome"
-                                ].values[0],
-                            }
-                        )
-
-                        self.main_dataset_df.loc[
-                            self.main_dataset_df["id"] == variant_wrapper.id
-                        ] = variant_info
+                            # rebuilding list with new values fetched
+                            variant_info_object.update_object(
+                                **{
+                                    "chromosome": variant.annotation.chromosome,
+                                    "start": variant.annotation.start,
+                                    "end": variant.annotation.end,
+                                    "alt": variant.annotation.alternate,
+                                    "ref": variant.annotation.reference,
+                                    "rs_id": variant.annotation.id,
+                                    "consequence_type": self._get_sequence_ontology_terms(
+                                        variant.annotation.consequenceTypes
+                                    ),
+                                    "biotypes": self._get_biotypes(
+                                        variant.annotation.consequenceTypes
+                                    ),
+                                    "population_frequency": self._get_population_frequency(
+                                        variant_info_object.sex,
+                                        variant.annotation.populationFrequencies,
+                                    ),
+                                    "type": variant_type,
+                                    "PhastCons": self._get_conservation_score_from_source(
+                                        self._PHAST_CONS,
+                                        variant.annotation.conservation
+                                    ),
+                                    "phylop": self._get_conservation_score_from_source(
+                                        self._PHYLOP,
+                                        variant.annotation.conservation
+                                    )
+                                }
+                            )
 
     def _get_population_frequency(self, sex, population_frequencies_list):
         """
@@ -384,3 +337,9 @@ class BuildDatasetCipapi(BuildDataset):
         :return:
         """
         pass
+
+    def _fetch_cipapi_data(self):
+        """
+        This method queries cipapi to complete some of the dataframe's fields.
+        :return:
+        """
