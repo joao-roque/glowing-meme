@@ -24,7 +24,7 @@ class BuildDataset:
     _GNOMAD_GENOMES = "GNOMAD_GENOMES"
 
     def __init__(self):
-
+        self._start_clients()
         # IMPORTANT DESCRIPTION OF DATASET
         # The dataset IS composed of variants that are associated with a specific case. This means that the same
         # variant can appear multiple times along the dataset as long as it does not contain repeated information
@@ -84,7 +84,6 @@ class BuildDatasetCVA(BuildDataset):
         Clients used to query services.
         """
         BuildDataset.__init__(self)
-        self._start_clients()
 
     def build_dataset(self):
         """
@@ -100,6 +99,7 @@ class BuildDatasetCVA(BuildDataset):
         )
         self._set_dataset_index_helper_by_attribute("id")
         self._fetch_specific_variant_information()
+        return self.main_dataset
 
     def _query_cva_archived_cases(self):
         """
@@ -329,17 +329,29 @@ class BuildDatasetCipapi(BuildDataset):
         ("chromosome", "start", "end") to be populated, otherwise it won't be able to find this information in cipapi.
         :param cva_built_dataset:
         """
-        pass
+        BuildDataset.__init__(self)
+        self.main_dataset = cva_built_dataset
+        self.dataset_index_helper = None
 
     def build_dataset(self):
         """
         Start building the dataset.
         :return:
         """
-        pass
+        self._set_dataset_index_helper_by_attribute("case_id")
+        self.main_dataset = self._fetch_cipapi_data()
 
     def _fetch_cipapi_data(self):
         """
         This method queries cipapi to complete some of the dataframe's fields.
         :return:
         """
+
+        for case_id in self.dataset_index_helper.keys():
+            case = case_id.split('-')[0]
+            version = case_id.split('-')[1]
+            interpretation_request = self.cipapi_client.get_case(case_id=case,
+                                                                 case_version=version)
+
+
+
