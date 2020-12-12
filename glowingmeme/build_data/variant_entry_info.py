@@ -1,5 +1,3 @@
-
-
 class VariantEntryInfo:
 
     VARIANT_INFO_VALUES = [
@@ -14,7 +12,9 @@ class VariantEntryInfo:
         "rs_id",
         "age",
         "sex",
-        "zigosity",
+        "zygosity_proband",
+        "zygosity_mother",
+        "zygosity_father",
         "tier",
         "mode_of_inheritance",
         "consequence_type",
@@ -30,9 +30,12 @@ class VariantEntryInfo:
         "program",
         "mother_ethnic_origin",
         "father_ethnic_origin",
+        "segregation_pattern",
+        "penetrance",
         "gel_variant_acmg_classification",
         "case_solved_family",
         "phenotypes_solved",
+        "actionability",
         "interpretation_message",
         "dict_extra_scores",
         "reported_outcome",
@@ -59,4 +62,3 @@ class VariantEntryInfo:
         for key in self.VARIANT_INFO_VALUES:
             if key in kwargs:
                 setattr(self, key, kwargs[key])
-

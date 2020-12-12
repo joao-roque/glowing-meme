@@ -1,6 +1,7 @@
 from enum import Enum
 from abc import abstractmethod
 from collections import Counter
+from operator import attrgetter
 from multiprocessing.dummy import Pool as ThreadPool
 
 from protocols.protocol_7_2.reports import Program, Assembly
@@ -94,9 +95,7 @@ class BuildDatasetCVA(BuildDataset):
             reported_variant_list,
             non_reported_variant_list,
         ) = self._query_cva_archived_cases()
-        self.main_dataset.update(
-            reported_variant_list + non_reported_variant_list
-        )
+        self.main_dataset.update(reported_variant_list + non_reported_variant_list)
         self._set_dataset_index_helper_by_attribute("id")
         self._fetch_specific_variant_information()
         return self.main_dataset
@@ -114,7 +113,7 @@ class BuildDatasetCVA(BuildDataset):
             assembly=Assembly.GRCh38,
             caseStatuses=["ARCHIVED_POSITIVE", "ARCHIVED_NEGATIVE"],
             include_all=False,
-            max_results=1
+            max_results=1,
         )
 
         for case in cases_iterator:
@@ -190,15 +189,16 @@ class BuildDatasetCVA(BuildDataset):
         # Implementing it here instead
         pool = ThreadPool(8)
         all_unique_variants_fetched = pool.map(
-            self.cva_variants_client.get_variant_by_id,
-            all_unique_variants
+            self.cva_variants_client.get_variant_by_id, all_unique_variants
         )
 
         for variant_wrapper in all_unique_variants_fetched:
             if variant_wrapper.variants:
                 for variant in variant_wrapper.variants:
                     if variant.assembly == self._ASSEMBLY_38 and variant.annotation:
-                        for variant_info_object in self.dataset_index_helper[variant_wrapper.id]:
+                        for variant_info_object in self.dataset_index_helper[
+                            variant_wrapper.id
+                        ]:
 
                             variant_type = variant.smallVariantType
                             if variant.variantType:
@@ -226,12 +226,11 @@ class BuildDatasetCVA(BuildDataset):
                                     "type": variant_type,
                                     "PhastCons": self._get_conservation_score_from_source(
                                         self._PHAST_CONS,
-                                        variant.annotation.conservation
+                                        variant.annotation.conservation,
                                     ),
                                     "phylop": self._get_conservation_score_from_source(
-                                        self._PHYLOP,
-                                        variant.annotation.conservation
-                                    )
+                                        self._PHYLOP, variant.annotation.conservation
+                                    ),
                                 }
                             )
 
@@ -256,7 +255,8 @@ class BuildDatasetCVA(BuildDataset):
             return population_sex_frequency
         return population_all_frequency
 
-    def _get_sequence_ontology_terms(self, consequence_types_list):
+    @staticmethod
+    def _get_sequence_ontology_terms(consequence_types_list):
         """
         This method returns a list of sequence ontology terms given a list of consequenceType objects.
         :return:
@@ -271,7 +271,8 @@ class BuildDatasetCVA(BuildDataset):
             return ",".join(sequence_names)
         return None
 
-    def _get_biotypes(self, consequence_types_list):
+    @staticmethod
+    def _get_biotypes(consequence_types_list):
         """
         This method returns a list of biotypes given a list of consequenceType objects.
         :return:
@@ -286,7 +287,8 @@ class BuildDatasetCVA(BuildDataset):
             return ",".join(biotypes)
         return None
 
-    def _get_conservation_score_from_source(self, source, conservation):
+    @staticmethod
+    def _get_conservation_score_from_source(source, conservation):
         """
         This method returns the required score given a conservation object list.
         :param conservation:
@@ -298,7 +300,8 @@ class BuildDatasetCVA(BuildDataset):
                     return conservation_score.score
         return None
 
-    def _get_variant_info(self, variant, info_dict):
+    @staticmethod
+    def _get_variant_info(variant, info_dict):
         """
         This method returns the tier for a given variant given a dictionary of the variant tiers.
         :param variant:
@@ -322,6 +325,11 @@ class BuildDatasetCVA(BuildDataset):
 
 
 class BuildDatasetCipapi(BuildDataset):
+
+    FATHER = "Father"
+    MOTHER = "Mother"
+    GENOMICS_ENGLAND_TIERING = "genomics_england_tiering"
+
     def __init__(self, cva_built_dataset):
         """
         This class takes as precursor a Pandas Dataframe with the columns defined in the parent class, in the variable
@@ -339,7 +347,8 @@ class BuildDatasetCipapi(BuildDataset):
         :return:
         """
         self._set_dataset_index_helper_by_attribute("case_id")
-        self.main_dataset = self._fetch_cipapi_data()
+        self._fetch_cipapi_data()
+        return self.main_dataset
 
     def _fetch_cipapi_data(self):
         """
@@ -348,10 +357,181 @@ class BuildDatasetCipapi(BuildDataset):
         """
 
         for case_id in self.dataset_index_helper.keys():
-            case = case_id.split('-')[0]
-            version = case_id.split('-')[1]
-            interpretation_request = self.cipapi_client.get_case(case_id=case,
-                                                                 case_version=version)
+            case = case_id.split("-")[0]
+            version = case_id.split("-")[1]
+            interpretation_request = self.cipapi_client.get_case(
+                case_id=case, case_version=version
+            )
 
+            # always pull the info from the latest report
+            latest_report = self._get_latest_report(
+                interpretation_request=interpretation_request
+            )
+            proband = [
+                member
+                for member in interpretation_request.pedigree.members
+                if member.isProband
+            ][0]
+            genomics_england_interpreted_genome = self._get_gel_interpreted_genome(
+                interpretation_request=interpretation_request
+            )
 
+            # we can now fill in every variant for this case with the relevant information
+            for variant_entry_info in self.dataset_index_helper[case_id]:
 
+                # get corresponding variant from interpreted genome
+                variant_in_genome = self._get_variant_from_interpreted_genome(
+                    interpreted_genome=genomics_england_interpreted_genome,
+                    variant_entry_info=variant_entry_info,
+                )
+
+                if variant_in_genome:
+                    (
+                        proband_zygosity,
+                        mother_zygosity,
+                        father_zygosity,
+                    ) = self._get_family_variant_zygosity(
+                        pedigree=interpretation_request.pedigree,
+                        variant=variant_in_genome,
+                    )
+
+                    variant_entry_info.zygosity_proband = proband_zygosity
+                    variant_entry_info.zygosity_mother = mother_zygosity
+                    variant_entry_info.zygosity_father = father_zygosity
+
+                    variant_entry_info.mode_of_inheritance = (
+                        variant_in_genome.reportEvents[0].modeOfInheritance
+                    )
+                    variant_entry_info.segregation_pattern = (
+                        variant_in_genome.reportEvents[0].segregationPattern
+                    )
+                    variant_entry_info.penetrance = variant_in_genome.reportEvents[
+                        0
+                    ].penetrance
+
+                    variant_entry_info.mother_ethnic_origin = (
+                        proband.ancestries.mothersEthnicOrigin
+                    )
+                    variant_entry_info.father_ethnic_origin = (
+                        proband.ancestries.fathersEthnicOrigin
+                    )
+
+                    variant_entry_info.case_solved_family = (
+                        latest_report.exit_questionnaire.exit_questionnaire_data[
+                            "familyLevelQuestions"
+                        ]["caseSolvedFamily"]
+                    )
+                    variant_entry_info.phenotypes_solved = (
+                        latest_report.exit_questionnaire.exit_questionnaire_data[
+                            "variantGroupLevelQuestions"
+                        ][-1]["phenotypesSolved"]
+                    )
+                    variant_entry_info.actionability = (
+                        latest_report.exit_questionnaire.exit_questionnaire_data[
+                            "variantGroupLevelQuestions"
+                        ][-1]["actionability"]
+                    )
+
+    def _get_family_variant_zygosity(self, pedigree, variant):
+        """
+        Given a pedigree and a variant, this method will return the zygosity values for the family.
+        :param pedigree:
+        :param variant:
+        :return: proband_zygosity, mother_zygosity, father_zygosity
+        """
+
+        mother_zygosity = None
+        father_zygosity = None
+        proband_zygosity = None
+
+        (
+            proband_participant_id,
+            mother_participant_id,
+            father_participant_id,
+        ) = self._get_family_ids(pedigree=pedigree)
+
+        for variant_call in variant.variantCalls:
+            if variant_call.participantId == proband_participant_id:
+                proband_zygosity = variant_call.zygosity
+            elif variant_call.participantId == mother_participant_id:
+                mother_zygosity = variant_call.zygosity
+            elif variant_call.participantId == father_participant_id:
+                father_zygosity = variant_call.zygosity
+
+        return proband_zygosity, mother_zygosity, father_zygosity
+
+    def _get_variant_from_interpreted_genome(
+        self, interpreted_genome, variant_entry_info
+    ):
+        """
+        This method will find the variant in the variant_entry_info in the given interpreted genome and return it.
+        :param interpreted_genome:
+        :param variant_entry_info:
+        :return:
+        """
+        interpreted_genome_variant_list = [
+            variant
+            for variant in interpreted_genome.interpretation_request_payload.variants
+            if variant.variantCoordinates.alternate == variant_entry_info.alt
+            and variant.variantCoordinates.chromosome == variant_entry_info.chromosome
+            and variant.variantCoordinates.position == variant_entry_info.start
+            and variant.variantCoordinates.reference == variant_entry_info.ref
+        ]
+
+        if len(interpreted_genome_variant_list) >= 1:
+            return interpreted_genome_variant_list[0]
+
+        return None
+
+    def _get_gel_interpreted_genome(self, interpretation_request):
+        """
+        Given an Interpretation Request, the interpreted genome that was created by genomics england tiering services
+        will be returned.
+        :param interpretation_request:
+        :return:
+        """
+        return max(
+            [
+                interpreted_genome
+                for interpreted_genome in interpretation_request.interpreted_genome
+                if interpreted_genome.interpretation_request_payload.interpretationService
+                == self.GENOMICS_ENGLAND_TIERING
+            ],
+            key=attrgetter("created_at"),
+        )
+
+    def _get_family_ids(self, pedigree):
+        """
+        Given a Pedigree object, this method will return the proband, father and mother participant ids.
+        :param pedigree:
+        :return: proband, mother, father participantIds
+        """
+        mother_participant_id = None
+        father_participant_id = None
+        proband_participant_id = None
+
+        for member in pedigree.members:
+            if member.isProband:
+                proband_participant_id = member.participantId
+            elif member.additionalInformation["relation_to_proband"] == self.FATHER:
+                father_participant_id = member.participantId
+            elif member.additionalInformation["relation_to_proband"] == self.MOTHER:
+                mother_participant_id = member.participantId
+
+        return proband_participant_id, mother_participant_id, father_participant_id
+
+    @staticmethod
+    def _get_latest_report(interpretation_request):
+        """
+        From a given interpretation request, the latest clinical report is pulled
+        :param interpretation_request:
+        :return:
+        """
+
+        return max(
+            [
+                clinical_report
+                for clinical_report in interpretation_request.clinical_report
+            ],
+            key=attrgetter("created_at"),
+        )
