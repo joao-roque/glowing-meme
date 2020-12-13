@@ -113,7 +113,7 @@ class BuildDatasetCVA(BuildDataset):
             assembly=Assembly.GRCh38,
             caseStatuses=["ARCHIVED_POSITIVE", "ARCHIVED_NEGATIVE"],
             include_all=False,
-            max_results=1,
+            max_results=5,
         )
 
         for case in cases_iterator:
@@ -188,51 +188,59 @@ class BuildDatasetCVA(BuildDataset):
         # threading available in client keeps breaking.
         # Implementing it here instead
         pool = ThreadPool(8)
-        all_unique_variants_fetched = pool.map(
-            self.cva_variants_client.get_variant_by_id, all_unique_variants
+        pool.map(
+            self._query_and_fill_variant_object, all_unique_variants
         )
 
-        for variant_wrapper in all_unique_variants_fetched:
-            if variant_wrapper.variants:
-                for variant in variant_wrapper.variants:
-                    if variant.assembly == self._ASSEMBLY_38 and variant.annotation:
-                        for variant_info_object in self.dataset_index_helper[
-                            variant_wrapper.id
-                        ]:
+    def _query_and_fill_variant_object(self, variant_id):
+        """
+        This method queries one variant ID
+        :param variant_id:
+        :return:
+        """
 
-                            variant_type = variant.smallVariantType
-                            if variant.variantType:
-                                variant_type = variant.variantType
+        variant_wrapper = self.cva_variants_client.get_variant_by_id(variant_id)
 
-                            # rebuilding list with new values fetched
-                            variant_info_object.update_object(
-                                **{
-                                    "chromosome": variant.annotation.chromosome,
-                                    "start": variant.annotation.start,
-                                    "end": variant.annotation.end,
-                                    "alt": variant.annotation.alternate,
-                                    "ref": variant.annotation.reference,
-                                    "rs_id": variant.annotation.id,
-                                    "consequence_type": self._get_sequence_ontology_terms(
-                                        variant.annotation.consequenceTypes
-                                    ),
-                                    "biotypes": self._get_biotypes(
-                                        variant.annotation.consequenceTypes
-                                    ),
-                                    "population_frequency": self._get_population_frequency(
-                                        variant_info_object.sex,
-                                        variant.annotation.populationFrequencies,
-                                    ),
-                                    "type": variant_type,
-                                    "PhastCons": self._get_conservation_score_from_source(
-                                        self._PHAST_CONS,
-                                        variant.annotation.conservation,
-                                    ),
-                                    "phylop": self._get_conservation_score_from_source(
-                                        self._PHYLOP, variant.annotation.conservation
-                                    ),
-                                }
-                            )
+        for variant in variant_wrapper.variants:
+
+            if variant.assembly == self._ASSEMBLY_38 and variant.annotation:
+                for variant_info_object in self.dataset_index_helper[
+                    variant_wrapper.id
+                ]:
+
+                    variant_type = variant.smallVariantType
+                    if variant.variantType:
+                        variant_type = variant.variantType
+
+                    # rebuilding list with new values fetched
+                    variant_info_object.update_object(
+                        **{
+                            "chromosome": variant.annotation.chromosome,
+                            "start": variant.annotation.start,
+                            "end": variant.annotation.end,
+                            "alt": variant.annotation.alternate,
+                            "ref": variant.annotation.reference,
+                            "rs_id": variant.annotation.id,
+                            "consequence_type": self._get_sequence_ontology_terms(
+                                variant.annotation.consequenceTypes
+                            ),
+                            "biotypes": self._get_biotypes(
+                                variant.annotation.consequenceTypes
+                            ),
+                            "population_frequency": self._get_population_frequency(
+                                variant_info_object.sex,
+                                variant.annotation.populationFrequencies,
+                            ),
+                            "type": variant_type,
+                            "PhastCons": self._get_conservation_score_from_source(
+                                self._PHAST_CONS,
+                                variant.annotation.conservation,
+                            ),
+                            "phylop": self._get_conservation_score_from_source(
+                                self._PHYLOP, variant.annotation.conservation
+                            ),
+                        }
+                    )
 
     def _get_population_frequency(self, sex, population_frequencies_list):
         """
@@ -346,91 +354,133 @@ class BuildDatasetCipapi(BuildDataset):
         Start building the dataset.
         :return:
         """
-        self._set_dataset_index_helper_by_attribute("case_id")
         self._fetch_cipapi_data()
         return self.main_dataset
 
     def _fetch_cipapi_data(self):
         """
-        This method queries cipapi to complete some of the dataframe's fields.
+        This method queries cipapi for more data.
         :return:
         """
 
-        for case_id in self.dataset_index_helper.keys():
-            case = case_id.split("-")[0]
-            version = case_id.split("-")[1]
-            interpretation_request = self.cipapi_client.get_case(
-                case_id=case, case_version=version
-            )
+        self._set_dataset_index_helper_by_attribute("case_id")
+        case_id_list = self.dataset_index_helper.keys()
 
-            # always pull the info from the latest report
-            latest_report = self._get_latest_report(
-                interpretation_request=interpretation_request
-            )
-            proband = [
-                member
-                for member in interpretation_request.pedigree.members
-                if member.isProband
-            ][0]
-            genomics_england_interpreted_genome = self._get_gel_interpreted_genome(
-                interpretation_request=interpretation_request
-            )
+        pool = ThreadPool(8)
+        pool.map(
+            self._query_data_for_case, case_id_list
+        )
 
-            # we can now fill in every variant for this case with the relevant information
-            for variant_entry_info in self.dataset_index_helper[case_id]:
+    def _query_data_for_case(self, case_id):
+        """
+        This method queries all the data for a given cipapi case.
+        :param case_id:
+        :return:
+        """
 
-                # get corresponding variant from interpreted genome
-                variant_in_genome = self._get_variant_from_interpreted_genome(
-                    interpreted_genome=genomics_england_interpreted_genome,
-                    variant_entry_info=variant_entry_info,
+        case = case_id.split("-")[0]
+        version = case_id.split("-")[1]
+        interpretation_request = self.cipapi_client.get_case(
+            case_id=case, case_version=version
+        )
+
+        # always pull the info from the latest report
+        latest_report = self._get_latest_report(
+            interpretation_request=interpretation_request
+        )
+        proband = [
+            member
+            for member in interpretation_request.pedigree.members
+            if member.isProband
+        ][0]
+        genomics_england_interpreted_genome = self._get_gel_interpreted_genome(
+            interpretation_request=interpretation_request
+        )
+
+        fast_lookup_dict = self._create_fast_lookup_dict(genomics_england_interpreted_genome)
+
+        # we can now fill in every variant for this case with the relevant information
+        for variant_entry_info in self.dataset_index_helper[case_id]:
+
+            fast_lookup_key_name = "{chr}_{start}".format(chr=variant_entry_info.chromosome,
+                                                          start=variant_entry_info.start)
+
+            # get corresponding variant from interpreted genome
+            variant_in_genome = None
+            if fast_lookup_key_name in fast_lookup_dict:
+                variant_in_genome = fast_lookup_dict[fast_lookup_key_name][0]
+
+            if variant_in_genome:
+                (
+                    proband_zygosity,
+                    mother_zygosity,
+                    father_zygosity,
+                ) = self._get_family_variant_zygosity(
+                    pedigree=interpretation_request.pedigree,
+                    variant=variant_in_genome,
                 )
 
-                if variant_in_genome:
-                    (
-                        proband_zygosity,
-                        mother_zygosity,
-                        father_zygosity,
-                    ) = self._get_family_variant_zygosity(
-                        pedigree=interpretation_request.pedigree,
-                        variant=variant_in_genome,
-                    )
+                variant_entry_info.zygosity_proband = proband_zygosity
+                variant_entry_info.zygosity_mother = mother_zygosity
+                variant_entry_info.zygosity_father = father_zygosity
 
-                    variant_entry_info.zygosity_proband = proband_zygosity
-                    variant_entry_info.zygosity_mother = mother_zygosity
-                    variant_entry_info.zygosity_father = father_zygosity
+                variant_entry_info.mode_of_inheritance = (
+                    variant_in_genome.reportEvents[0].modeOfInheritance
+                )
+                variant_entry_info.segregation_pattern = (
+                    variant_in_genome.reportEvents[0].segregationPattern
+                )
+                variant_entry_info.penetrance = variant_in_genome.reportEvents[
+                    0
+                ].penetrance
 
-                    variant_entry_info.mode_of_inheritance = (
-                        variant_in_genome.reportEvents[0].modeOfInheritance
-                    )
-                    variant_entry_info.segregation_pattern = (
-                        variant_in_genome.reportEvents[0].segregationPattern
-                    )
-                    variant_entry_info.penetrance = variant_in_genome.reportEvents[
-                        0
-                    ].penetrance
+                variant_entry_info.mother_ethnic_origin = (
+                    proband.ancestries.mothersEthnicOrigin
+                )
+                variant_entry_info.father_ethnic_origin = (
+                    proband.ancestries.fathersEthnicOrigin
+                )
 
-                    variant_entry_info.mother_ethnic_origin = (
-                        proband.ancestries.mothersEthnicOrigin
-                    )
-                    variant_entry_info.father_ethnic_origin = (
-                        proband.ancestries.fathersEthnicOrigin
-                    )
+                variant_entry_info.case_solved_family = (
+                    latest_report.exit_questionnaire.exit_questionnaire_data[
+                        "familyLevelQuestions"
+                    ]["caseSolvedFamily"]
+                )
 
-                    variant_entry_info.case_solved_family = (
-                        latest_report.exit_questionnaire.exit_questionnaire_data[
-                            "familyLevelQuestions"
-                        ]["caseSolvedFamily"]
-                    )
+                if len(latest_report.exit_questionnaire.exit_questionnaire_data["variantGroupLevelQuestions"]) >= 1:
+
                     variant_entry_info.phenotypes_solved = (
                         latest_report.exit_questionnaire.exit_questionnaire_data[
                             "variantGroupLevelQuestions"
                         ][-1]["phenotypesSolved"]
                     )
+
                     variant_entry_info.actionability = (
                         latest_report.exit_questionnaire.exit_questionnaire_data[
                             "variantGroupLevelQuestions"
                         ][-1]["actionability"]
                     )
+
+    def _create_fast_lookup_dict(self, interpreted_genome):
+        """
+        This method takes all the small variant objects from an interpreted genome and puts them in a dictionary
+        index by chr_start. This makes it extremely quicker to query for variants later, since we can reduce the
+        searchable list by that index.
+        :param interpreted_genome:
+        :return:
+        """
+
+        fast_lookup_variant_dict = {}
+        for variant in interpreted_genome.interpretation_request_payload.variants:
+            key_name = "{chr}_{start}".format(chr=variant.variantCoordinates.chromosome,
+                                              start=variant.variantCoordinates.position)
+
+            if key_name in fast_lookup_variant_dict:
+                fast_lookup_variant_dict[key_name].append(variant)
+            else:
+                fast_lookup_variant_dict[key_name] = [variant]
+
+        return fast_lookup_variant_dict
 
     def _get_family_variant_zygosity(self, pedigree, variant):
         """
@@ -459,29 +509,6 @@ class BuildDatasetCipapi(BuildDataset):
                 father_zygosity = variant_call.zygosity
 
         return proband_zygosity, mother_zygosity, father_zygosity
-
-    def _get_variant_from_interpreted_genome(
-        self, interpreted_genome, variant_entry_info
-    ):
-        """
-        This method will find the variant in the variant_entry_info in the given interpreted genome and return it.
-        :param interpreted_genome:
-        :param variant_entry_info:
-        :return:
-        """
-        interpreted_genome_variant_list = [
-            variant
-            for variant in interpreted_genome.interpretation_request_payload.variants
-            if variant.variantCoordinates.alternate == variant_entry_info.alt
-            and variant.variantCoordinates.chromosome == variant_entry_info.chromosome
-            and variant.variantCoordinates.position == variant_entry_info.start
-            and variant.variantCoordinates.reference == variant_entry_info.ref
-        ]
-
-        if len(interpreted_genome_variant_list) >= 1:
-            return interpreted_genome_variant_list[0]
-
-        return None
 
     def _get_gel_interpreted_genome(self, interpretation_request):
         """
