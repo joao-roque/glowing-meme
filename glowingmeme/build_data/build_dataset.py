@@ -1,3 +1,5 @@
+import os
+import csv
 from enum import Enum
 from abc import abstractmethod
 from collections import Counter
@@ -78,13 +80,24 @@ class BuildDataset:
                     dataset_by_key[new_key] = [variant_info_object]
         self.dataset_index_helper = dataset_by_key
 
+    def save_data_to_csv(self, file_name):
+        """
+        This method takes the main dataset that was created and saves it to a csv
+        :param file_name:
+        :return:
+        """
+        with open(file_name, "w") as variant_entries_file:
+
+            variant_entries_csv = csv.writer(variant_entries_file, delimiter=',')
+
+            # we start by adding the header, which is always the variant_info_values from the object
+            variant_entries_csv.writerow(VariantEntryInfo.VARIANT_INFO_VALUES)
+
+            for variant_entry in self.main_dataset:
+                variant_entries_csv.writerow(list(variant_entry))
+
 
 class BuildDatasetCVA(BuildDataset):
-    def __init__(self):
-        """
-        Clients used to query services.
-        """
-        BuildDataset.__init__(self)
 
     def build_dataset(self):
         """
@@ -113,7 +126,7 @@ class BuildDatasetCVA(BuildDataset):
             assembly=Assembly.GRCh38,
             caseStatuses=["ARCHIVED_POSITIVE", "ARCHIVED_NEGATIVE"],
             include_all=False,
-            max_results=5,
+            max_results=100,
         )
 
         for case in cases_iterator:
@@ -187,7 +200,9 @@ class BuildDatasetCVA(BuildDataset):
 
         # threading available in client keeps breaking.
         # Implementing it here instead
-        pool = ThreadPool(8)
+        pool = ThreadPool(os.cpu_count())
+        pool.daemon = True
+
         pool.map(
             self._query_and_fill_variant_object, all_unique_variants
         )
@@ -345,7 +360,7 @@ class BuildDatasetCipapi(BuildDataset):
         ("chromosome", "start", "end") to be populated, otherwise it won't be able to find this information in cipapi.
         :param cva_built_dataset:
         """
-        BuildDataset.__init__(self)
+        super().__init__()
         self.main_dataset = cva_built_dataset
         self.dataset_index_helper = None
 
@@ -355,7 +370,6 @@ class BuildDatasetCipapi(BuildDataset):
         :return:
         """
         self._fetch_cipapi_data()
-        return self.main_dataset
 
     def _fetch_cipapi_data(self):
         """
@@ -366,7 +380,9 @@ class BuildDatasetCipapi(BuildDataset):
         self._set_dataset_index_helper_by_attribute("case_id")
         case_id_list = self.dataset_index_helper.keys()
 
-        pool = ThreadPool(8)
+        pool = ThreadPool(os.cpu_count())
+        pool.daemon = True
+
         pool.map(
             self._query_data_for_case, case_id_list
         )
