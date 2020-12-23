@@ -34,7 +34,7 @@ class BuildDataset:
         # and outcomes.
 
         # this is a set of VariantEntryInfo objects. It is a set because we do not want repeated variants
-        self.main_dataset = set()
+        self.main_dataset = []
 
         # this helper can be redefined by which attribute need by calling _set_dataset_index_helper_by_attribute
         # NOTE: This dictionary is a reference to the original objects in the main_dataset list. If a change is made
@@ -73,7 +73,7 @@ class BuildDataset:
         dataset_by_key = {}
         if dataset_key in VariantEntryInfo.VARIANT_INFO_VALUES:
             for variant_info_object in self.main_dataset:
-                new_key = vars(variant_info_object)[dataset_key]
+                new_key = getattr(variant_info_object, dataset_key)
                 if new_key in dataset_by_key:
                     dataset_by_key[new_key].append(variant_info_object)
                 else:
@@ -88,7 +88,7 @@ class BuildDataset:
         """
         with open(file_name, "w") as variant_entries_file:
 
-            variant_entries_csv = csv.writer(variant_entries_file, delimiter=',')
+            variant_entries_csv = csv.writer(variant_entries_file, delimiter=",")
 
             # we start by adding the header, which is always the variant_info_values from the object
             variant_entries_csv.writerow(VariantEntryInfo.VARIANT_INFO_VALUES)
@@ -98,7 +98,6 @@ class BuildDataset:
 
 
 class BuildDatasetCVA(BuildDataset):
-
     def build_dataset(self):
         """
         This method starts the process to build the Dataset Based on CVA queries.
@@ -108,7 +107,7 @@ class BuildDatasetCVA(BuildDataset):
             reported_variant_list,
             non_reported_variant_list,
         ) = self._query_cva_archived_cases()
-        self.main_dataset.update(reported_variant_list + non_reported_variant_list)
+        self.main_dataset = reported_variant_list + non_reported_variant_list
         self._set_dataset_index_helper_by_attribute("id")
         self._fetch_specific_variant_information()
         return self.main_dataset
@@ -126,7 +125,7 @@ class BuildDatasetCVA(BuildDataset):
             assembly=Assembly.GRCh38,
             caseStatuses=["ARCHIVED_POSITIVE", "ARCHIVED_NEGATIVE"],
             include_all=False,
-            max_results=100,
+            max_results=1,
         )
 
         for case in cases_iterator:
@@ -143,7 +142,7 @@ class BuildDatasetCVA(BuildDataset):
             tiered_variants = case.get("tieredVariants", {})
             age = case.get("probandEstimatedAgeAtAnalysis", None)
             classified_variants = case.get("classifiedVariants", {})
-            interpretation_message = case.get("interpretation", None)
+            interpretation_message = str(case.get("interpretation", None)).encode("utf-8")
 
             for variant in case.get("reportedVariants", []):
                 tier = self._get_variant_info(variant, tiered_variants)
@@ -203,13 +202,11 @@ class BuildDatasetCVA(BuildDataset):
         pool = ThreadPool(os.cpu_count())
         pool.daemon = True
 
-        pool.map(
-            self._query_and_fill_variant_object, all_unique_variants
-        )
+        pool.map(self._query_and_fill_variant_object, all_unique_variants)
 
     def _query_and_fill_variant_object(self, variant_id):
         """
-        This method queries one variant ID
+        This method queries one variant ID, and updates the corresponding variant info object with the new info.
         :param variant_id:
         :return:
         """
@@ -232,7 +229,7 @@ class BuildDatasetCVA(BuildDataset):
                         **{
                             "chromosome": variant.annotation.chromosome,
                             "start": variant.annotation.start,
-                            "end": variant.annotation.end,
+                            "end": variant.annotation.start + len(variant.annotation.reference),
                             "alt": variant.annotation.alternate,
                             "ref": variant.annotation.reference,
                             "rs_id": variant.annotation.id,
@@ -248,8 +245,7 @@ class BuildDatasetCVA(BuildDataset):
                             ),
                             "type": variant_type,
                             "PhastCons": self._get_conservation_score_from_source(
-                                self._PHAST_CONS,
-                                variant.annotation.conservation,
+                                self._PHAST_CONS, variant.annotation.conservation,
                             ),
                             "phylop": self._get_conservation_score_from_source(
                                 self._PHYLOP, variant.annotation.conservation
@@ -383,9 +379,7 @@ class BuildDatasetCipapi(BuildDataset):
         pool = ThreadPool(os.cpu_count())
         pool.daemon = True
 
-        pool.map(
-            self._query_data_for_case, case_id_list
-        )
+        pool.map(self._query_data_for_case, case_id_list)
 
     def _query_data_for_case(self, case_id):
         """
@@ -413,13 +407,16 @@ class BuildDatasetCipapi(BuildDataset):
             interpretation_request=interpretation_request
         )
 
-        fast_lookup_dict = self._create_fast_lookup_dict(genomics_england_interpreted_genome)
+        fast_lookup_dict = self._create_fast_lookup_dict(
+            genomics_england_interpreted_genome
+        )
 
         # we can now fill in every variant for this case with the relevant information
         for variant_entry_info in self.dataset_index_helper[case_id]:
 
-            fast_lookup_key_name = "{chr}_{start}".format(chr=variant_entry_info.chromosome,
-                                                          start=variant_entry_info.start)
+            fast_lookup_key_name = "{chr}_{start}".format(
+                chr=variant_entry_info.chromosome, start=variant_entry_info.start
+            )
 
             # get corresponding variant from interpreted genome
             variant_in_genome = None
@@ -432,20 +429,19 @@ class BuildDatasetCipapi(BuildDataset):
                     mother_zygosity,
                     father_zygosity,
                 ) = self._get_family_variant_zygosity(
-                    pedigree=interpretation_request.pedigree,
-                    variant=variant_in_genome,
+                    pedigree=interpretation_request.pedigree, variant=variant_in_genome,
                 )
 
                 variant_entry_info.zygosity_proband = proband_zygosity
                 variant_entry_info.zygosity_mother = mother_zygosity
                 variant_entry_info.zygosity_father = father_zygosity
 
-                variant_entry_info.mode_of_inheritance = (
-                    variant_in_genome.reportEvents[0].modeOfInheritance
-                )
-                variant_entry_info.segregation_pattern = (
-                    variant_in_genome.reportEvents[0].segregationPattern
-                )
+                variant_entry_info.mode_of_inheritance = variant_in_genome.reportEvents[
+                    0
+                ].modeOfInheritance
+                variant_entry_info.segregation_pattern = variant_in_genome.reportEvents[
+                    0
+                ].segregationPattern
                 variant_entry_info.penetrance = variant_in_genome.reportEvents[
                     0
                 ].penetrance
@@ -457,25 +453,37 @@ class BuildDatasetCipapi(BuildDataset):
                     proband.ancestries.fathersEthnicOrigin
                 )
 
-                variant_entry_info.case_solved_family = (
-                    latest_report.exit_questionnaire.exit_questionnaire_data[
+                if (
+                    latest_report.exit_questionnaire
+                    and len(
+                        latest_report.exit_questionnaire.exit_questionnaire_data[
+                            "variantGroupLevelQuestions"
+                        ]
+                    )
+                    >= 1
+                ):
+
+                    variant_entry_info.case_solved_family = latest_report.exit_questionnaire.exit_questionnaire_data[
                         "familyLevelQuestions"
-                    ]["caseSolvedFamily"]
-                )
+                    ][
+                        "caseSolvedFamily"
+                    ]
 
-                if len(latest_report.exit_questionnaire.exit_questionnaire_data["variantGroupLevelQuestions"]) >= 1:
+                    variant_entry_info.phenotypes_solved = latest_report.exit_questionnaire.exit_questionnaire_data[
+                        "variantGroupLevelQuestions"
+                    ][
+                        -1
+                    ][
+                        "phenotypesSolved"
+                    ]
 
-                    variant_entry_info.phenotypes_solved = (
-                        latest_report.exit_questionnaire.exit_questionnaire_data[
-                            "variantGroupLevelQuestions"
-                        ][-1]["phenotypesSolved"]
-                    )
-
-                    variant_entry_info.actionability = (
-                        latest_report.exit_questionnaire.exit_questionnaire_data[
-                            "variantGroupLevelQuestions"
-                        ][-1]["actionability"]
-                    )
+                    variant_entry_info.actionability = latest_report.exit_questionnaire.exit_questionnaire_data[
+                        "variantGroupLevelQuestions"
+                    ][
+                        -1
+                    ][
+                        "actionability"
+                    ]
 
     def _create_fast_lookup_dict(self, interpreted_genome):
         """
@@ -488,8 +496,10 @@ class BuildDatasetCipapi(BuildDataset):
 
         fast_lookup_variant_dict = {}
         for variant in interpreted_genome.interpretation_request_payload.variants:
-            key_name = "{chr}_{start}".format(chr=variant.variantCoordinates.chromosome,
-                                              start=variant.variantCoordinates.position)
+            key_name = "{chr}_{start}".format(
+                chr=variant.variantCoordinates.chromosome,
+                start=variant.variantCoordinates.position,
+            )
 
             if key_name in fast_lookup_variant_dict:
                 fast_lookup_variant_dict[key_name].append(variant)
@@ -578,3 +588,24 @@ class BuildDatasetCipapi(BuildDataset):
             ],
             key=attrgetter("created_at"),
         )
+
+
+class BuildDatasetCellbase(BuildDataset):
+
+    def __init__(self, cipapi_built_dataset):
+        super().__init__()
+        self.main_dataset = cipapi_built_dataset
+        self.dataset_index_helper = None
+
+    def build_dataset(self):
+        """
+        This method starts updating the variant entries with Cellbase info.
+        :return:
+        """
+        self._set_dataset_index_helper_by_attribute("")
+
+    def _build_variant_id(self):
+        pass
+
+
+

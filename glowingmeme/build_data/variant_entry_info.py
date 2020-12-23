@@ -41,6 +41,8 @@ class VariantEntryInfo:
         "reported_outcome",
     ]
 
+    __slots__ = VARIANT_INFO_VALUES
+
     def __init__(self, **kwargs):
         """
         This object holds the variant entry info and can be set with a dictionary
@@ -54,6 +56,18 @@ class VariantEntryInfo:
             else:
                 setattr(self, key, None)
 
+    def __iter__(self):
+        """
+        This method returns an ordered iterator of this class's attributes as per VARIANT_INFO_VALUES.
+        :return:
+        """
+        return iter(
+            [
+                self.__getattribute__(attr)
+                for attr in self.VARIANT_INFO_VALUES
+            ]
+        )
+
     def update_object(self, **kwargs):
         """
         This method updates attributes given in dict kwargs.
@@ -62,11 +76,3 @@ class VariantEntryInfo:
         for key in self.VARIANT_INFO_VALUES:
             if key in kwargs:
                 setattr(self, key, kwargs[key])
-
-    def __iter__(self):
-        """
-        This method returns an ordered iterator of this class's attributes as per VARIANT_INFO_VALUES.
-        :return:
-        """
-        return iter([value for attr, value in self.__dict__.items() if attr != 'VARIANT_INFO_VALUES'])
-

@@ -15,4 +15,10 @@ bd_cipapi.save_data_to_csv("hello_there.csv")
 print("--- %s seconds ---" % (time.time() - start_time))
 print(memory_tracking.heap())
 
+import sys
+
+local_vars = list(locals().items())
+for var, obj in local_vars:
+    print(var, sys.getsizeof(obj))
+
 x = 1

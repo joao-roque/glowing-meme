@@ -30,5 +30,16 @@ cipapi, cellbase, cva = Clients().get_all_clients()
 # variant = variants_cva_client.get_variant_by_id("53816dff6dd23a1e1c48d0d6767c51c2")
 
 ## test cipapi queries
-interpretation_request = cipapi.get_case(case_id="41190", case_version=1)
+# interpretation_request = cipapi.get_case(case_id="41190", case_version=1)
+
+
+self._cellbase_variant_client.get_annotation(gel_variant_id_list,
+                                                                                      method=self._POST,
+                                                                                      include=self._include_list,
+                                                                                      assembly=self._assembly,
+                                                                                      normalize=self._normalize,
+                                                                                      skipDecompose=self._skip_decompose,
+                                                                                      ignorePhase=self._ignore_phase,
+                                                                                      checkAminoAcidChange=
+                                                                                      self._check_amino_acid_change)
 x = 1
