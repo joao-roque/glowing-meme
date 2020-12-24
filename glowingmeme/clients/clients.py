@@ -1,5 +1,7 @@
 import os
 import yaml
+from requests import HTTPError
+
 from pyark.cva_client import CvaClient
 from pycellbase.cbclient import CellBaseClient
 from pycellbase.cbconfig import ConfigClient
@@ -82,3 +84,23 @@ class Clients:
             self.get_cellbase_client(),
             self.get_cva_client(),
         )
+
+
+def renew_access_token(func):
+    """
+    This method is meant to be used as a decorator to renew clients if their tokens expire.
+    :param func:
+    :return:
+    """
+
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except HTTPError:
+            # restart clients
+            args[0].start_clients()
+
+            # once the token is refreshed, we can retry the operation
+            return func(*args, **kwargs)
+
+    return wrapper

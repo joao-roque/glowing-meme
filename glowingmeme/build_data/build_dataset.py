@@ -8,7 +8,7 @@ from multiprocessing.dummy import Pool as ThreadPool
 
 from protocols.protocol_7_2.reports import Program, Assembly
 
-from glowingmeme.clients.clients import Clients
+from glowingmeme.clients.clients import Clients, renew_access_token
 from glowingmeme.build_data.variant_entry_info import VariantEntryInfo
 
 
@@ -27,13 +27,23 @@ class BuildDataset:
     _GNOMAD_GENOMES = "GNOMAD_GENOMES"
 
     def __init__(self):
-        self._start_clients()
+
+        # predefining clients that will be used
+        self.cva_client = None
+        self.cipapi_client = None
+        self.cellbase_client = None
+        self.cva_cases_client = None
+        self.cva_variants_client = None
+        self.cellbase_variants_client = None
+
+        self.start_clients()
+
         # IMPORTANT DESCRIPTION OF DATASET
         # The dataset IS composed of variants that are associated with a specific case. This means that the same
         # variant can appear multiple times along the dataset as long as it does not contain repeated information
         # and outcomes.
 
-        # this is a set of VariantEntryInfo objects. It is a set because we do not want repeated variants
+        # this is a list of VariantEntryInfo objects
         self.main_dataset = []
 
         # this helper can be redefined by which attribute need by calling _set_dataset_index_helper_by_attribute
@@ -44,14 +54,14 @@ class BuildDataset:
     @abstractmethod
     def build_dataset(self):
         """
-        This method should initialize the process of building a dataset and return a pandas DataFrame of it.
+        This method should initialize the process of building a dataset.
         :return:
         """
         pass
 
-    def _start_clients(self):
+    def start_clients(self):
         """
-        Auto restart of clients so tokens don't expire.
+        Start all the required clients.
         :return:
         """
         (
@@ -61,6 +71,7 @@ class BuildDataset:
         ) = Clients().get_all_clients()
         self.cva_cases_client = self.cva_client.cases()
         self.cva_variants_client = self.cva_client.variants()
+        self.cellbase_variants_client = self.cellbase_client.get_variant_client()
 
     def _set_dataset_index_helper_by_attribute(self, dataset_key):
         """
@@ -98,6 +109,15 @@ class BuildDataset:
 
 
 class BuildDatasetCVA(BuildDataset):
+
+    def __init__(self):
+        """
+        This is the first BuildDataset object to be called since it will fetch the relevant cases from CVA from which
+        the remaining data will be fetched for.
+        :return:
+        """
+        super().__init__()
+
     def build_dataset(self):
         """
         This method starts the process to build the Dataset Based on CVA queries.
@@ -110,8 +130,8 @@ class BuildDatasetCVA(BuildDataset):
         self.main_dataset = reported_variant_list + non_reported_variant_list
         self._set_dataset_index_helper_by_attribute("id")
         self._fetch_specific_variant_information()
-        return self.main_dataset
 
+    @renew_access_token
     def _query_cva_archived_cases(self):
         """
         This method queries all the CVA cases that were archived with a positive result. It build
@@ -125,7 +145,7 @@ class BuildDatasetCVA(BuildDataset):
             assembly=Assembly.GRCh38,
             caseStatuses=["ARCHIVED_POSITIVE", "ARCHIVED_NEGATIVE"],
             include_all=False,
-            max_results=1,
+            max_results=5,
         )
 
         for case in cases_iterator:
@@ -204,6 +224,7 @@ class BuildDatasetCVA(BuildDataset):
 
         pool.map(self._query_and_fill_variant_object, all_unique_variants)
 
+    @renew_access_token
     def _query_and_fill_variant_object(self, variant_id):
         """
         This method queries one variant ID, and updates the corresponding variant info object with the new info.
@@ -381,6 +402,7 @@ class BuildDatasetCipapi(BuildDataset):
 
         pool.map(self._query_data_for_case, case_id_list)
 
+    @renew_access_token
     def _query_data_for_case(self, case_id):
         """
         This method queries all the data for a given cipapi case.
@@ -592,7 +614,13 @@ class BuildDatasetCipapi(BuildDataset):
 
 class BuildDatasetCellbase(BuildDataset):
 
+    _CELLBASE_QUERY_BATCH_SIZE = 1000
+
     def __init__(self, cipapi_built_dataset):
+        """
+        This method takes in its precursor dataset, which is the one updated by the Cipapi Dataset builder.
+        :param cipapi_built_dataset:
+        """
         super().__init__()
         self.main_dataset = cipapi_built_dataset
         self.dataset_index_helper = None
@@ -604,8 +632,46 @@ class BuildDatasetCellbase(BuildDataset):
         """
         self._set_dataset_index_helper_by_attribute("")
 
-    def _build_variant_id(self):
+    def _build_variant_id(self, variant_info_objects):
+        """
+        This method creates a list of variants ids to query Cellbase from the given list
+        :param variant_info_objects:
+        :return:
+        """
         pass
 
+    def _annotate_variants_in_batches(self):
+        """
+        We build batches of variants to query Cellbase with, so that we don't send too big of a request which
+        threatens to send the service down.
+        :return:
+        """
 
+        # TODO this needs to be changed to divide by unique variants to be queried
+        list_of_batches = []
+        for list_chunk in range(0, len(self.main_dataset), self._CELLBASE_QUERY_BATCH_SIZE):
+            list_of_batches.append(self.main_dataset[list_chunk:list_chunk + self._CELLBASE_QUERY_BATCH_SIZE])
 
+        # we are putting a hard cap of threads here to not overload Cellbase
+        pool = ThreadPool(8)
+        pool.map(self._call_cellbase_with_batch, list_of_batches)
+
+    @renew_access_token
+    def _call_cellbase_with_batch(self, variants_to_query):
+        """
+        This method takes a list of VariantInfo objects. It will query Cellbase and update the object with the new info.
+        :param variants_to_query:
+        :return:
+        """
+
+        variant_ids_list = self._build_variant_id(variants_to_query)
+
+        self.cellbase_variants_client.get_annotation(variant_ids_list,
+                                                     method=self._POST,
+                                                     include=self._include_list,
+                                                     assembly=self._assembly,
+                                                     normalize=self._normalize,
+                                                     skipDecompose=self._skip_decompose,
+                                                     ignorePhase=self._ignore_phase,
+                                                     checkAminoAcidChange=
+                                                     self._check_amino_acid_change)
