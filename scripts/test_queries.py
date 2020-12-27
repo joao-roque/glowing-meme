@@ -33,13 +33,7 @@ cipapi, cellbase, cva = Clients().get_all_clients()
 # interpretation_request = cipapi.get_case(case_id="41190", case_version=1)
 
 
-self._cellbase_variant_client.get_annotation(gel_variant_id_list,
-                                                                                      method=self._POST,
-                                                                                      include=self._include_list,
-                                                                                      assembly=self._assembly,
-                                                                                      normalize=self._normalize,
-                                                                                      skipDecompose=self._skip_decompose,
-                                                                                      ignorePhase=self._ignore_phase,
-                                                                                      checkAminoAcidChange=
-                                                                                      self._check_amino_acid_change)
+variant = cellbase.get_annotation(["chr1:248638310:C:T"],
+                                  method="post",
+                                  assembly="GRCh38")
 x = 1

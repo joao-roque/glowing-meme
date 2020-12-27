@@ -15,7 +15,7 @@ class Clients:
 
     PROD_CVA_HOST = "https://bio-prod-cva.gel.zone"
     PROD_CIPAPI_HOST = "https://cipapi-prod.gel.zone"
-    PROD_CELLBASE_HOST = "https://cellbase.gel.zone/"
+    PROD_CELLBASE_HOST = "https://cellbase.gel.zone/cellbase"
 
     def __init__(self, cipapi_host=None, cva_host=None, cellbase_host=None):
         self._credentials = self._get_credentials()

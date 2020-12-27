@@ -12,6 +12,7 @@ class VariantEntryInfo:
         "rs_id",
         "age",
         "sex",
+        "cellbase_query_id",
         "zygosity_proband",
         "zygosity_mother",
         "zygosity_father",
