@@ -1,0 +1,65 @@
+import os
+import sys
+import logging
+import argparse
+
+from glowingmeme.build_data.build_dataset_cva import BuildDatasetCVA
+from glowingmeme.build_data.build_dataset_cipapi import  BuildDatasetCipapi
+from glowingmeme.build_data.build_dataset_cellbase import BuildDatasetCellbase
+
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(threadName)s] %(levelname)s %(module)s:%(lineno)d - %(message)s",
+                    datefmt="%Y-%M-%d %H:%M:%S",
+                    stream=sys.stderr)
+
+logger = logging.getLogger("RDTiering")
+
+__author__ = 'jalmeida'
+
+
+def _build_dataset(dataset_save_location_folder):
+    """
+    This method triggers the dataset building given a location folder, and versions it.
+    :param dataset_save_location:
+    :return:
+    """
+    bd_cva = BuildDatasetCVA()
+    bd_cva.build_dataset()
+
+    bd_cipapi = BuildDatasetCipapi(bd_cva.main_dataset)
+    bd_cipapi.build_dataset()
+
+    bd_cellbase = BuildDatasetCellbase(bd_cipapi.main_dataset)
+    bd_cellbase.build_dataset()
+
+    new_dataset_name = _define_new_dataset_file_name(dataset_save_location_folder)
+
+    # save the versioned dataset to given folder
+    bd_cellbase.save_data_to_csv(os.path.join(dataset_save_location_folder, new_dataset_name))
+
+def _define_new_dataset_file_name(dataset_save_location_folder):
+    """
+    This method scans the given folder and creates a new versioned dataset.
+    :param dataset_save_location_folder:
+    :return:
+    """
+    return ""
+
+def main():
+    """
+    main of glowing meme
+    :return:
+    """
+    parser = argparse.ArgumentParser(
+        description='This program queries Cellbase, CVA and CIPAPI to build a dataset of variants with'
+                    'participant specific information.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("output", help='Output folder where the dataset will be written to.')
+    args = parser.parse_args()
+
+    _build_dataset(args.output)
+
+
+if __name__ == '__main__':
+    main()

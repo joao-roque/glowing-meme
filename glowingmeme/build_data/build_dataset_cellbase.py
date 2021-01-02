@@ -1,3 +1,4 @@
+import os
 from multiprocessing.dummy import Pool as ThreadPool
 
 from glowingmeme.clients.clients import renew_access_token
@@ -7,16 +8,23 @@ from glowingmeme.build_data.build_dataset import BuildDataset
 class BuildDatasetCellbase(BuildDataset):
 
     _POST = "post"
+    _SCORE = "score"
+    _SOURCE = "source"
     _RESULT_FIELD = "result"
     _PHAST_CONS = "phastCons"
     _VARIANT_ID_SEPARATOR = ":"
-    _CELLBASE_QUERY_BATCH_SIZE = 1000
+    _CELLBASE_QUERY_BATCH_SIZE = 200
+
+    _CONSERVATION = "conservation"
+    _FUNCTIONAL_SCORES = "functionalScore"
+    _GENE_TRAIT_ASSOCIATION = "geneTraitAssociation"
     _VARIANT_TRAIT_ASSOCIATION = "variantTraitAssociation"
 
     _INCLUDE_LIST = [
-        _VARIANT_TRAIT_ASSOCIATION,
-        "gwas",
-        "functionalScore"
+        "annotation." + _CONSERVATION,
+        "annotation." + _FUNCTIONAL_SCORES,
+        "annotation." + _GENE_TRAIT_ASSOCIATION,
+        "annotation." + _VARIANT_TRAIT_ASSOCIATION,
     ]
 
     def __init__(self, cipapi_built_dataset):
@@ -33,86 +41,118 @@ class BuildDatasetCellbase(BuildDataset):
         This method starts updating the variant entries with Cellbase info.
         :return:
         """
-        self._populate_cellbase_query_id()
-        self._set_dataset_index_helper_by_attribute("cellbase_query_id")
-        self._annotate_variants_in_batches()
+        self._set_dataset_index_helper_by_attribute("rs_id")
+        self._annotate_variation()
 
-    def _build_variant_id(self, variant_info_object):
-        """
-        This method creates a variants ids to query Cellbase from the variant object
-        :param variant_info_object:
-        :return:
-        """
-        # for some reason, sometimes CNVs are included with the <CN_> notation. We skip those here
-        if "<" in variant_info_object.ref or "<" in variant_info_object.alt:
-            return ""
-
-        return self._VARIANT_ID_SEPARATOR.join([variant_info_object.chromosome,
-                                                str(variant_info_object.start),
-                                                variant_info_object.ref,
-                                                variant_info_object.alt])
-
-    def _populate_cellbase_query_id(self):
-        """
-        This method populates the cellbase_query_id for each Variant Info object.
-        :return:
-        """
-        for variant_info in self.main_dataset:
-            variant_info.update_object(**{"cellbase_query_id": self._build_variant_id(variant_info)})
-
-    def _annotate_variants_in_batches(self):
+    def _annotate_variation(self):
         """
         We build batches of variants to query Cellbase with, so that we don't send too big of a request which
         threatens to send the service down.
         :return:
         """
 
-        # TODO this needs to be changed to divide by unique variants to be queried
         list_of_batches = []
-        variant_ids_to_query = [variant_id for variant_id in self.dataset_index_helper.keys() if variant_id]
-        for list_chunk in range(0, len(variant_ids_to_query), self._CELLBASE_QUERY_BATCH_SIZE):
-            list_of_batches.append(variant_ids_to_query[list_chunk:list_chunk + self._CELLBASE_QUERY_BATCH_SIZE])
+        variant_ids_to_query = [
+            variant_id for variant_id in self.dataset_index_helper.keys() if variant_id
+        ]
+        for list_chunk in range(
+            0, len(variant_ids_to_query), self._CELLBASE_QUERY_BATCH_SIZE
+        ):
+            list_of_batches.append(
+                variant_ids_to_query[
+                    list_chunk: list_chunk + self._CELLBASE_QUERY_BATCH_SIZE
+                ]
+            )
 
         # we are putting a hard cap of threads here to not overload Cellbase
-        pool = ThreadPool(8)
-        pool.map(self._call_cellbase_with_batch, list_of_batches)
+        pool = ThreadPool(os.cpu_count())
+        pool.map(self._call_cellbase_variation, list_of_batches)
 
     @renew_access_token
-    def _call_cellbase_with_batch(self, variant_ids_to_query):
+    def _call_cellbase_variation(self, variant_ids_to_query):
         """
         This method takes a list of VariantInfo objects. It will query Cellbase and update the object with the new info.
+        Some information of algorithms is only available for GRCh37. As such, we use this method to query Cellbase
+        with rs ids, to get the corresponding build 37 variant that have the relevant information.
         :param variants_to_query:
         :return:
         """
+        # since we're querying with rs_ids we are able to get relevant information for our build38 variant in a
+        # build37 search in Cellbase (since there is more information available at the time)
 
-        for variant_id_list_index, response in enumerate(self.cellbase_client.get_annotation(variant_ids_to_query,
-                                                                                  method=self._POST,
-                                                                                  # include=self._INCLUDE_LIST,
-                                                                                  assembly=self._ASSEMBLY_38,
-                                                                                  )):
-            if response[self._RESULT_FIELD]:
-                cellbase_variant_info = response[self._RESULT_FIELD][0]
+        # this doesn't yield back, so we have to retrieve all at once. It's only max of 200 cases per query, so
+        # it's fine to hold in memory here
+        response = self.cellbase_client.search(
+            id=variant_ids_to_query, method=self._POST, include=self._INCLUDE_LIST
+        )
 
-                # now we fill in all the variant information for these variants
-                for variant_info in self.dataset_index_helper[variant_ids_to_query[variant_id_list_index]]:
+        # TODO results from cellbase and queries need to have same length, needs fix
+        if not response[0][self._RESULT_FIELD] or len(response[0][self._RESULT_FIELD]) != len(variant_ids_to_query):
+            raise Exception
 
-                    # There should always be only one response. However if there are more here, we ignore them
-                    variant_info.update_object(**{
-                        "CADD_score": cellbase_variant_info,
-                        "clinVar": self._get_clinvar_classification(cellbase_variant_info[self._VARIANT_TRAIT_ASSOCIATION]),
+        for variant_id_list_index, individual_result in enumerate(
+            response[0][self._RESULT_FIELD]
+        ):
 
-                    })
+            # now we fill in all the variant information for these variants
+            for variant_info in self.dataset_index_helper[
+                variant_ids_to_query[variant_id_list_index]
+            ]:
+                cellbase_variant_info = individual_result["annotation"]
 
-    def _get_clinvar_classification(self, variant_trait_association):
+                # There should always be only one response. However if there are more here, we ignore them
+                variant_info.update_object(
+                    **{
+                        "CADD_scaled_score": self._get_cadd_classification(
+                            cellbase_variant_info
+                        ),
+                        "GERP": self._get_conservation_score_from_source(
+                            cellbase_variant_info[self._CONSERVATION], "gerp"
+                        ),
+                        "phastCons": self._get_conservation_score_from_source(
+                            cellbase_variant_info[self._CONSERVATION], "phastCons"
+                        ),
+                        "phylop": self._get_conservation_score_from_source(
+                            cellbase_variant_info[self._CONSERVATION], "phylop"
+                        ),
+                        "clinVar": self._get_clinvar_classification(
+                            cellbase_variant_info
+                        ),
+                    }
+                )
+
+    def _get_conservation_score_from_source(self, conservation, source):
         """
-        From the variantTraitAssociation response from Cellbase, extract ClinVar information
-        :param variant_trait_association:
+        From a given conservation scores dictionary, this method returns the score for the given source.
+        :param conservation:
         :return:
         """
+        for conservation_values in conservation:
+            if conservation_values[self._SOURCE] == source:
+                return conservation_values[self._SCORE]
 
-        if "clinvar" in variant_trait_association:
-            # if there are only numbers in the accession, that is the one we want, as opposed to the individual records.
-            for record in variant_trait_association["clinvar"]:
-                if record["accession"].isdigit():
-                    return record["clinicalSignificance"]
-        return
+    def _get_cadd_classification(self, annotation):
+        """
+        This method extracts the scaled CADD value from a list of functional scores for a given variant.
+        :param functional_scores:
+        :return:
+        """
+        if self._FUNCTIONAL_SCORES in annotation:
+            for functional_score in annotation[self._FUNCTIONAL_SCORES]:
+                if functional_score[self._SOURCE] == "cadd_scaled":
+                    return functional_score[self._SCORE]
+
+    def _get_clinvar_classification(self, annotation):
+        """
+        From the annotation response from Cellbase (if it exists), extract ClinVar information.
+        :param annotation:
+        :return:
+        """
+        if self._VARIANT_TRAIT_ASSOCIATION in annotation:
+            variant_trait_association = annotation[self._VARIANT_TRAIT_ASSOCIATION]
+            if "clinvar" in variant_trait_association:
+                # if there are only numbers in the accession,
+                # that is the one we want, as opposed to the individual records.
+                for record in variant_trait_association["clinvar"]:
+                    if record["accession"].isdigit():
+                        return record["clinicalSignificance"]

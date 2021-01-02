@@ -63,6 +63,7 @@ class BuildDataset:
             self.cellbase_client,
             self.cva_client,
         ) = Clients().get_all_clients()
+
         self.cva_cases_client = self.cva_client.cases()
         self.cva_variants_client = self.cva_client.variants()
 

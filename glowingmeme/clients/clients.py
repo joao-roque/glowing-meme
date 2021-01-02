@@ -59,9 +59,7 @@ class Clients:
             "rest": {"hosts": [self.PROD_CELLBASE_HOST]},
         }
         cellbase_client = CellBaseClient(ConfigClient(cellbase_configuration))
-        cellbase_variant_client = cellbase_client.get_variant_client()
-
-        return cellbase_variant_client
+        return cellbase_client.get_variation_client()
 
     def get_cva_client(self):
         """

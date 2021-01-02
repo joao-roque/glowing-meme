@@ -66,7 +66,9 @@ class BuildDatasetCVA(BuildDataset):
             tiered_variants = case.get("tieredVariants", {})
             age = case.get("probandEstimatedAgeAtAnalysis", None)
             classified_variants = case.get("classifiedVariants", {})
-            interpretation_message = str(case.get("interpretation", None)).encode("utf-8")
+            interpretation_message = str(case.get("interpretation", None)).encode(
+                "utf-8"
+            )
 
             for variant in case.get("reportedVariants", []):
                 tier = self._get_variant_info(variant, tiered_variants)
@@ -152,9 +154,11 @@ class BuildDatasetCVA(BuildDataset):
                     # rebuilding list with new values fetched
                     variant_info_object.update_object(
                         **{
-                            "chromosome": self._CHROMOSOME + variant.annotation.chromosome,
+                            "chromosome": self._CHROMOSOME
+                            + variant.annotation.chromosome,
                             "start": variant.annotation.start,
-                            "end": variant.annotation.start + len(variant.annotation.reference),
+                            "end": variant.annotation.start
+                            + len(variant.annotation.reference),
                             "alt": variant.annotation.alternate,
                             "ref": variant.annotation.reference,
                             "rs_id": variant.annotation.id,
@@ -266,4 +270,3 @@ class BuildDatasetCVA(BuildDataset):
         """
         subtracted_list = set((Counter(array_2) - Counter(array_1)).elements())
         return subtracted_list
-

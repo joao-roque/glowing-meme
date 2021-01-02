@@ -12,7 +12,6 @@ class VariantEntryInfo:
         "rs_id",
         "age",
         "sex",
-        "cellbase_query_id",
         "zygosity_proband",
         "zygosity_mother",
         "zygosity_father",
@@ -21,10 +20,9 @@ class VariantEntryInfo:
         "consequence_type",
         "biotypes",
         "population_frequency",
-        "CADD_score",
+        "CADD_scaled_score",
         "type",
         "clinVar",
-        "DisGeNET",
         "PhastCons",
         "phylop",
         "GERP",
@@ -62,12 +60,7 @@ class VariantEntryInfo:
         This method returns an ordered iterator of this class's attributes as per VARIANT_INFO_VALUES.
         :return:
         """
-        return iter(
-            [
-                self.__getattribute__(attr)
-                for attr in self.VARIANT_INFO_VALUES
-            ]
-        )
+        return iter([self.__getattribute__(attr) for attr in self.VARIANT_INFO_VALUES])
 
     def update_object(self, **kwargs):
         """
