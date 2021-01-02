@@ -79,7 +79,8 @@ class BuildDatasetCipapi(BuildDataset):
         for variant_entry_info in self.dataset_index_helper[case_id]:
 
             fast_lookup_key_name = "{chr}_{start}".format(
-                chr=variant_entry_info.chromosome.replace("chr", ""), start=variant_entry_info.start
+                chr=variant_entry_info.chromosome.replace("chr", ""),
+                start=variant_entry_info.start,
             )
 
             # get corresponding variant from interpreted genome

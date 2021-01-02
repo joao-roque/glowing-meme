@@ -21,6 +21,7 @@ class BuildDatasetCellbase(BuildDataset):
     _VARIANT_TRAIT_ASSOCIATION = "variantTraitAssociation"
 
     _INCLUDE_LIST = [
+        "id",
         "annotation." + _CONSERVATION,
         "annotation." + _FUNCTIONAL_SCORES,
         "annotation." + _GENE_TRAIT_ASSOCIATION,
@@ -60,7 +61,7 @@ class BuildDatasetCellbase(BuildDataset):
         ):
             list_of_batches.append(
                 variant_ids_to_query[
-                    list_chunk: list_chunk + self._CELLBASE_QUERY_BATCH_SIZE
+                    list_chunk : list_chunk + self._CELLBASE_QUERY_BATCH_SIZE
                 ]
             )
 
@@ -81,24 +82,23 @@ class BuildDatasetCellbase(BuildDataset):
         # build37 search in Cellbase (since there is more information available at the time)
 
         # this doesn't yield back, so we have to retrieve all at once. It's only max of 200 cases per query, so
-        # it's fine to hold in memory here
+        # it's fine to hold in memory here, even though it's multi threaded.
         response = self.cellbase_client.search(
-            id=variant_ids_to_query, method=self._POST, include=self._INCLUDE_LIST
+            id=variant_ids_to_query, include=self._INCLUDE_LIST
         )
 
-        # TODO results from cellbase and queries need to have same length, needs fix
-        if not response[0][self._RESULT_FIELD] or len(response[0][self._RESULT_FIELD]) != len(variant_ids_to_query):
-            raise Exception
+        response_helper = {}
+        for individual_result in response[0][self._RESULT_FIELD]:
+            if individual_result["id"] in response_helper:
+                response_helper[individual_result["id"]].append(individual_result)
+            else:
+                response_helper[individual_result["id"]] = [individual_result]
 
-        for variant_id_list_index, individual_result in enumerate(
-            response[0][self._RESULT_FIELD]
-        ):
+        for rs_id in response_helper.keys():
 
             # now we fill in all the variant information for these variants
-            for variant_info in self.dataset_index_helper[
-                variant_ids_to_query[variant_id_list_index]
-            ]:
-                cellbase_variant_info = individual_result["annotation"]
+            for variant_info in self.dataset_index_helper[rs_id]:
+                cellbase_variant_info = response_helper[rs_id][-1]["annotation"]
 
                 # There should always be only one response. However if there are more here, we ignore them
                 variant_info.update_object(

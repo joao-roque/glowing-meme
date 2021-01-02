@@ -1,4 +1,6 @@
 import os
+import sys
+import logging
 from collections import Counter
 from multiprocessing.dummy import Pool as ThreadPool
 
@@ -9,10 +11,31 @@ from glowingmeme.build_data.build_dataset import BuildDataset
 from glowingmeme.build_data.build_dataset import ReportedOutcomeEnum
 from glowingmeme.build_data.variant_entry_info import VariantEntryInfo
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(threadName)s] %(levelname)s %(module)s:%(lineno)d - %(message)s",
+    datefmt="%Y-%M-%d %H:%M:%S",
+    stream=sys.stderr,
+)
+
+logger = logging.getLogger("GlowingMeme")
 
 class BuildDatasetCVA(BuildDataset):
 
     _CHROMOSOME = "chr"
+    _INCLUDE_LIST = [
+        "assembly",
+        "variantType",
+        "annotation.id",
+        "smallVariantType",
+        "annotation.start",
+        "annotation.reference",
+        "annotation.alternate",
+        "annotation.chromosome",
+        "annotation.conservation",
+        "annotation.consequenceTypes",
+        "annotation.populationFrequencies"
+    ]
 
     def __init__(self):
         """
@@ -32,6 +55,8 @@ class BuildDatasetCVA(BuildDataset):
             non_reported_variant_list,
         ) = self._query_cva_archived_cases()
         self.main_dataset = reported_variant_list + non_reported_variant_list
+
+        logger.info("Started fetching individual variant info from CVA.")
         self._set_dataset_index_helper_by_attribute("id")
         self._fetch_specific_variant_information()
 
@@ -49,7 +74,7 @@ class BuildDatasetCVA(BuildDataset):
             assembly=Assembly.GRCh38,
             caseStatuses=["ARCHIVED_POSITIVE", "ARCHIVED_NEGATIVE"],
             include_all=False,
-            max_results=1,
+            max_results=10,
         )
 
         for case in cases_iterator:
@@ -138,7 +163,8 @@ class BuildDatasetCVA(BuildDataset):
         :return:
         """
 
-        variant_wrapper = self.cva_variants_client.get_variant_by_id(variant_id)
+        variant_wrapper = self.cva_variants_client.get_variant_by_id(variant_id,
+                                                                     include=self._INCLUDE_LIST)
 
         for variant in variant_wrapper.variants:
 

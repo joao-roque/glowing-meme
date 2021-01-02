@@ -4,39 +4,50 @@ import logging
 import argparse
 
 from glowingmeme.build_data.build_dataset_cva import BuildDatasetCVA
-from glowingmeme.build_data.build_dataset_cipapi import  BuildDatasetCipapi
+from glowingmeme.build_data.build_dataset_cipapi import BuildDatasetCipapi
 from glowingmeme.build_data.build_dataset_cellbase import BuildDatasetCellbase
 
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(threadName)s] %(levelname)s %(module)s:%(lineno)d - %(message)s",
-                    datefmt="%Y-%M-%d %H:%M:%S",
-                    stream=sys.stderr)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(threadName)s] %(levelname)s %(module)s:%(lineno)d - %(message)s",
+    datefmt="%Y-%M-%d %H:%M:%S",
+    stream=sys.stderr,
+)
 
-logger = logging.getLogger("RDTiering")
+logger = logging.getLogger("GlowingMeme")
 
-__author__ = 'jalmeida'
+__author__ = "jalmeida"
+
+dataset_name = "glowingmeme_{version}_dataset.csv"
 
 
 def _build_dataset(dataset_save_location_folder):
     """
     This method triggers the dataset building given a location folder, and versions it.
-    :param dataset_save_location:
+    :param dataset_save_location_folder:
     :return:
     """
+
+    logger.info("Started fetching data from CVA")
     bd_cva = BuildDatasetCVA()
     bd_cva.build_dataset()
 
+    logger.info("Started fetching data from Cipapi")
     bd_cipapi = BuildDatasetCipapi(bd_cva.main_dataset)
     bd_cipapi.build_dataset()
 
+    logger.info("Started fetching data from Cellbase")
     bd_cellbase = BuildDatasetCellbase(bd_cipapi.main_dataset)
     bd_cellbase.build_dataset()
 
     new_dataset_name = _define_new_dataset_file_name(dataset_save_location_folder)
 
     # save the versioned dataset to given folder
-    bd_cellbase.save_data_to_csv(os.path.join(dataset_save_location_folder, new_dataset_name))
+    bd_cellbase.save_data_to_csv(
+        os.path.join(dataset_save_location_folder, new_dataset_name)
+    )
+
 
 def _define_new_dataset_file_name(dataset_save_location_folder):
     """
@@ -44,7 +55,19 @@ def _define_new_dataset_file_name(dataset_save_location_folder):
     :param dataset_save_location_folder:
     :return:
     """
-    return ""
+
+    iterator_version = 0
+    while True:
+        if not os.path.exists(
+            os.path.join(
+                dataset_save_location_folder,
+                dataset_name.format(version=str(iterator_version)),
+            )
+        ):
+            return dataset_name.format(version=str(iterator_version))
+
+        iterator_version += 1
+
 
 def main():
     """
@@ -52,14 +75,19 @@ def main():
     :return:
     """
     parser = argparse.ArgumentParser(
-        description='This program queries Cellbase, CVA and CIPAPI to build a dataset of variants with'
-                    'participant specific information.',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("output", help='Output folder where the dataset will be written to.')
+        description="This program queries Cellbase, CVA and CIPAPI to build a dataset of variants with"
+        "participant specific information.\n"
+        "NOTE: This application requires a GEL_CREDENTIALS environment variable "
+        "that is pointing to a credentials file.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "output", help="Output folder where the dataset will be written to."
+    )
     args = parser.parse_args()
 
     _build_dataset(args.output)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
